@@ -5,6 +5,7 @@
 //   - a virtual network with one subnet, protected by that NSG
 //   - a static public IP with a DNS label, so the VM has a stable name:
 //       <dnsLabel>.<region>.cloudapp.azure.com
+//   (production: shoplite-aadarsh.northcentralus.cloudapp.azure.com)
 //
 // What the internet can reach (everything else is blocked):
 //   443  HTTPS   from anywhere   -> Caddy -> the ShopLite API

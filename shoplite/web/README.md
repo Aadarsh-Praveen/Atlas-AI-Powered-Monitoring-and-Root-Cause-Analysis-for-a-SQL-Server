@@ -35,8 +35,8 @@ API stays on the Azure VM.
 1. In Vercel, **import the GitHub repo** and set **Root Directory** to `shoplite/web`. Vercel detects
    Next.js; the default build settings are right.
 2. Add the environment variable **`NEXT_PUBLIC_API_URL`** =
-   `https://<dns-label>.<region>.cloudapp.azure.com` (the Bicep `fqdn` output, https, no trailing
-   slash).
+   `https://shoplite-aadarsh.northcentralus.cloudapp.azure.com` (the Bicep `fqdn` output, https, no
+   trailing slash).
 3. **Deploy**, then copy your production domain (e.g. `shoplite-xyz.vercel.app`).
 4. On the VM, put `https://<that domain>` in `ALLOWED_ORIGINS` in `C:\atlas\shoplite\api\.env` and
    run `Restart-Service shoplite-api` (`shoplite/api/deploy/README.md`, step 8).

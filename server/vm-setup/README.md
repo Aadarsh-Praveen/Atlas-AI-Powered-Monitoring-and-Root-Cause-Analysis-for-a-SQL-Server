@@ -22,7 +22,7 @@ This guide is Phase 2, Part C3. It ends with SalesDB built and seeded with 1,000
 
 On your Mac, open **Windows App** (Microsoft's Remote Desktop app) and add a PC:
 
-- **PC name:** the `fqdn` output from the Bicep deployment, `<dnsLabel>.<region>.cloudapp.azure.com`
+- **PC name:** `shoplite-aadarsh.northcentralus.cloudapp.azure.com` (the `fqdn` output from the Bicep deployment)
 - **User account:** the Windows `adminUsername` and password from the deployment
 
 If the connection times out, your public IP has probably changed since you deployed. Update

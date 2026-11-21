@@ -1,6 +1,7 @@
 // infra/main.bicep: everything inside the rg-shoplite-prod resource group.
 //
-// Deploy (the owner runs this; see infra/README.md):
+// Deploy (the owner runs this; see infra/README.md, which also covers deploying
+// main.json through the portal's "Deploy a custom template"):
 //   az deployment group create \
 //     --resource-group rg-shoplite-prod \
 //     --template-file infra/main.bicep \
@@ -12,7 +13,7 @@
 //   network.bicep        NSG (1433 denied first; 443, 80, RDP-from-your-IP),
 //                        virtual network + subnet, static public IP with DNS label
 //   vm.bicep             prod-sql-01: SQL Server 2022 Developer on Windows Server
-//                        2022, B2ms, UTC, OS disk + 64 GB data disk, boot diagnostics
+//                        2022, B2as_v2, UTC, OS disk + 64 GB data disk, boot diagnostics
 //   sql-vm.bicep         SQL IaaS Agent: SQL authentication, LOCAL connectivity
 //   auto-shutdown.bicep  daily deallocation at shutdownTime
 //
@@ -24,15 +25,15 @@ targetScope = 'resourceGroup'
 // -----------------------------------------------------------------------------
 // Parameters (non-secret values come from prod.parameters.local.json)
 // -----------------------------------------------------------------------------
-@description('Azure region for every resource. Defaults to the resource group\'s region (e.g. eastus2).')
+@description('Azure region for every resource. Defaults to the resource group\'s region (production: northcentralus).')
 param location string = resourceGroup().location
 
 @description('VM name and Windows computer name.')
 @maxLength(15)
 param vmName string = 'prod-sql-01'
 
-@description('VM size.')
-param vmSize string = 'Standard_B2ms'
+@description('VM size. Standard_B2as_v2 = 2 vCPU (AMD), 8 GB RAM, burstable; B2ms wasn\'t available to this subscription in the East US regions.')
+param vmSize string = 'Standard_B2as_v2'
 
 @description('Data disk size in GB (SQL data, SQL log, app logs).')
 param dataDiskSizeGB int = 64
@@ -51,7 +52,7 @@ param sqlAdminUsername string
 @secure()
 param sqlAdminPassword string
 
-@description('DNS label: the VM becomes <dnsLabel>.<region>.cloudapp.azure.com.')
+@description('DNS label: the VM becomes <dnsLabel>.<region>.cloudapp.azure.com (production: shoplite-aadarsh.northcentralus.cloudapp.azure.com).')
 param dnsLabel string
 
 @description('Your public IP in CIDR form (e.g. 203.0.113.25/32); the only source allowed to RDP.')

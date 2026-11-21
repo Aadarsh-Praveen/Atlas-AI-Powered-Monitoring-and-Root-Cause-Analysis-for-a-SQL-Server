@@ -12,7 +12,7 @@ wrong. Written in Phase 2; the first document in `knowledge/`. Atlas reads it fr
 ```
 Shopper's browser ──HTTPS──▶ Vercel: ShopLite storefront (Next.js)
         │
-        └── API calls, HTTPS ──▶ <dns-label>.<region>.cloudapp.azure.com  (static public IP)
+        └── API calls, HTTPS ──▶ shoplite-aadarsh.northcentralus.cloudapp.azure.com  (static public IP)
                                     Azure VM prod-sql-01
                                     ├─ Caddy           ports 443 and 80     service "caddy"
                                     ├─ ShopLite API    127.0.0.1:8000       service "shoplite-api"
@@ -25,7 +25,7 @@ and the API queries SalesDB.
 | Component | Where | Details |
 |---|---|---|
 | Storefront | Vercel | Built from GitHub, root directory `shoplite/web`. Calls the API at `NEXT_PUBLIC_API_URL` (fixed at build time). |
-| VM | Azure, resource group `rg-shoplite-prod` | `prod-sql-01`, Standard_B2ms (2 vCPU, 8 GB RAM), Windows Server 2022, time zone **UTC**. Tags `project=atlas`, `env=prod`, `app=shoplite`. Defined in `infra/` (Bicep). |
+| VM | Azure, resource group `rg-shoplite-prod` | `prod-sql-01`, Standard_B2as_v2 (2 vCPU AMD, 8 GB RAM, burstable, no temporary disk), Windows Server 2022, time zone **UTC**. Region North Central US (`northcentralus`). Tags `project=atlas`, `env=prod`, `app=shoplite`. Defined in `infra/` (Bicep). |
 | Caddy | VM, service `caddy` | HTTPS front door. Let's Encrypt certificate for the DNS name, renewed automatically. Redirects HTTP to HTTPS and forwards to `127.0.0.1:8000`. Config: `C:\atlas\shoplite\api\deploy\Caddyfile`. |
 | ShopLite API | VM, service `shoplite-api` | FastAPI on Uvicorn, **2 worker processes**, listening on **127.0.0.1:8000 only**. Runs as `NT AUTHORITY\LocalService`. Code in `C:\atlas`; settings in `C:\atlas\shoplite\api\.env`. |
 | SQL Server | VM, service `MSSQLSERVER` | SQL Server 2022 Developer. Database `SalesDB` (about 1,000,000 orders). Accepts local connections only. Max server memory 5 GB. Recovery model SIMPLE (Phase 4 changes it to FULL). |
@@ -81,7 +81,7 @@ az vm get-instance-view -g rg-shoplite-prod -n prod-sql-01 \
 From anywhere:
 
 ```bash
-curl -s https://<dns-label>.<region>.cloudapp.azure.com/health
+curl -s https://shoplite-aadarsh.northcentralus.cloudapp.azure.com/health
 ```
 
 | Response | Meaning |
@@ -99,6 +99,13 @@ Get-Service MSSQLSERVER, shoplite-api, caddy                       # all three: 
 Invoke-RestMethod http://127.0.0.1:8000/health                       # bypasses Caddy
 Get-Volume -DriveLetter C, F | Format-Table DriveLetter, SizeRemaining, Size
 ```
+
+**CPU credits (burstable VM).** `prod-sql-01` is a B2as_v2: it runs at full speed while it has CPU
+credits and drops to a low baseline (about 40% of its CPU) when they run out. In the portal, open the
+VM → **Metrics** → **CPU Credits Remaining**. Near zero means the VM is throttled. You'll see slow
+API responses and long-running queries with nothing else wrong: services running, `/health` ok,
+plenty of disk. Sustained work drains credits: the seed, load tests, heavy reports. Credits refill
+while the VM is quieter than its baseline.
 
 In SQL Server, the API's connections are tagged with the release:
 

@@ -61,6 +61,9 @@ logs/
 # ---------------------------------------------------------------------------
 *.local.json
 .azure/
+# ARM JSON compiled from main.bicep (az bicep build) for portal deployments.
+# Generated: main.bicep is the source of truth, so rebuild instead of committing.
+infra/main.json
 
 # ---------------------------------------------------------------------------
 # Project docs

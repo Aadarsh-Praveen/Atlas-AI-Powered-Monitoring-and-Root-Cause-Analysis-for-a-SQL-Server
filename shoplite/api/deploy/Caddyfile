@@ -11,7 +11,7 @@
 #
 # The site address comes from the SHOPLITE_API_HOST environment variable,
 # set in the service definition (caddy.xml), e.g.
-#   shoplite-yourname.eastus2.cloudapp.azure.com
+#   shoplite-aadarsh.northcentralus.cloudapp.azure.com
 # so this file holds no personal names and needs no edits per machine.
 #
 # After changing this file: deploy.ps1 restarts Caddy, or run

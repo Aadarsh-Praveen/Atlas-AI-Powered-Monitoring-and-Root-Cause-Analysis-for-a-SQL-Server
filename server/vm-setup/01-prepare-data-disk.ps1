@@ -20,8 +20,10 @@
     skipped, and folders and permissions are only added if missing. The script
     never formats a disk that already has partitions.
 
-    Drive letter: C: is Windows; D: is Azure's temporary disk (wiped on
-    deallocation, never for data). F: is used for the data disk.
+    Drive letter: C: is Windows. D: is kept free for Azure's temporary disk on
+    sizes that have one (wiped on deallocation, never for data); production's
+    B2as_v2 has no temporary disk, but leaving D: alone keeps the layout the same
+    on any size. F: is used for the data disk.
 
 .PARAMETER DriveLetter
     Letter for the data volume. Default F.

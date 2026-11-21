@@ -82,12 +82,14 @@ function Stop-Deploy([string]$Message) {
 }
 
 # Run git in the repo; stop the deploy if it fails. Returns its output lines.
+# PowerShell unwraps a single line into a plain [string], so callers wrap the
+# call in @(...) before indexing; otherwise [0] would be the first character.
 function Invoke-Git {
     $output = & git -C $RepoPath @args 2>&1
     if ($LASTEXITCODE -ne 0) {
         Stop-Deploy "git $($args -join ' ') failed:`n$($output -join "`n")"
     }
-    return @($output | ForEach-Object { "$_" })
+    $output | ForEach-Object { "$_" }
 }
 
 # -----------------------------------------------------------------------------
@@ -105,7 +107,7 @@ Write-Ok "Repo, .env, and service found."
 # 2. Pull
 # -----------------------------------------------------------------------------
 Write-Step "Code"
-$before = (Invoke-Git rev-parse --short HEAD)[0]
+$before = @(Invoke-Git rev-parse --short HEAD)[0]
 $changedFiles = @()
 
 if ($SkipPull) {
@@ -122,7 +124,7 @@ else {
     Invoke-Git checkout $Branch | Out-Null
     # --ff-only: never create a merge commit on the server.
     Invoke-Git pull --ff-only origin $Branch | Out-Null
-    $after = (Invoke-Git rev-parse --short HEAD)[0]
+    $after = @(Invoke-Git rev-parse --short HEAD)[0]
     if ($after -eq $before) {
         Write-Ok "Already up to date at $after."
     }
@@ -131,7 +133,7 @@ else {
         Write-Ok "Updated $before -> $after ($($changedFiles.Count) files changed)."
     }
 }
-$commit = (Invoke-Git rev-parse --short HEAD)[0]
+$commit = @(Invoke-Git rev-parse --short HEAD)[0]
 
 if ($changedFiles -contains 'shoplite/api/deploy/shoplite-api.xml' -or $changedFiles -contains 'shoplite/api/deploy/caddy.xml') {
     Write-Warning "A service definition (.xml) changed. Those changes apply only after reinstalling the service; see README.md, 'Changing a service definition'."
@@ -162,7 +164,7 @@ if ($previousVersion -eq $Version) {
     Write-Warning "APP_VERSION is already $Version. Each deploy should get a new version, so releases can be told apart."
 }
 if ($previous) {
-    $lines = $lines | ForEach-Object { if ($_ -match '^\s*APP_VERSION\s*=') { "APP_VERSION=$Version" } else { $_ } }
+    $lines = @($lines | ForEach-Object { if ($_ -match '^\s*APP_VERSION\s*=') { "APP_VERSION=$Version" } else { $_ } })
 }
 else {
     $lines += "APP_VERSION=$Version"
@@ -202,7 +204,7 @@ while ((Get-Date) -lt $deadline) {
         if ($body.status -eq 'ok' -and $body.version -eq $Version) {
             Write-Ok "Healthy: status ok, database $($body.database), version $($body.version) (header X-App-Version: $($response.Headers['X-App-Version']))."
             Write-Host "`nDeployed ShopLite API $Version (commit $commit)." -ForegroundColor Green
-            Write-Host "Check from your Mac: https://<your DNS name>/health"
+            Write-Host "Check from your Mac: https://shoplite-aadarsh.northcentralus.cloudapp.azure.com/health"
             exit 0
         }
         $last = "status $($body.status), version $($body.version)"

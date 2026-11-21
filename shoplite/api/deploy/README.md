@@ -129,11 +129,12 @@ Copy-Item C:\atlas\shoplite\api\deploy\caddy.xml C:\services\caddy\caddy-svc.xml
 notepad C:\services\caddy\caddy-svc.xml
 ```
 
-In the copy, set `SHOPLITE_API_HOST` to your DNS name (the Bicep `fqdn` output). Then check the
-configuration and install:
+The copy already names production's host, `shoplite-aadarsh.northcentralus.cloudapp.azure.com`
+(`SHOPLITE_API_HOST`); check it matches the Bicep `fqdn` output. Then validate the configuration and
+install:
 
 ```powershell
-$env:SHOPLITE_API_HOST = "<your DNS name>"
+$env:SHOPLITE_API_HOST = "shoplite-aadarsh.northcentralus.cloudapp.azure.com"
 C:\services\caddy\caddy.exe validate --config C:\atlas\shoplite\api\deploy\Caddyfile --adapter caddyfile
 
 C:\services\caddy\caddy-svc.exe install
@@ -148,12 +149,12 @@ obtained successfully". If it fails, check that the NSG and Windows Firewall all
 ### 6. Check from your Mac
 
 ```bash
-curl -i https://<your DNS name>/health      # 200, "status":"ok", valid certificate (no -k needed)
-curl -I http://<your DNS name>/health       # 308 redirect to https
-nc -vz -w 5 <your DNS name> 1433            # must FAIL (time out or be refused)
+curl -i https://shoplite-aadarsh.northcentralus.cloudapp.azure.com/health   # 200, "status":"ok", valid certificate
+curl -I http://shoplite-aadarsh.northcentralus.cloudapp.azure.com/health    # 308 redirect to https
+nc -vz -w 5 shoplite-aadarsh.northcentralus.cloudapp.azure.com 1433         # must FAIL (time out or be refused)
 ```
 
-Also try `https://<your DNS name>:8000/health`; it must fail, because the API only listens on
+Also try `https://shoplite-aadarsh.northcentralus.cloudapp.azure.com:8000/health`; it must fail, because the API only listens on
 127.0.0.1.
 
 ### 7. Survive a restart
@@ -216,7 +217,7 @@ Start-Service shoplite-api
 ```
 
 For Caddy it's the same with `caddy-svc.exe` and `caddy-svc.xml`; set `SHOPLITE_API_HOST` again in
-the new copy.
+the new copy (it already names production's host).
 
 ## Logs
 

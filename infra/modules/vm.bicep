@@ -2,8 +2,8 @@
 //
 // Creates:
 //   - a network card (NIC) in the VM subnet, with the public IP attached
-//   - the VM: SQL Server 2022 Developer on Windows Server 2022, B2ms
-//     (2 vCPU, 8 GB RAM), time zone UTC, boot diagnostics on
+//   - the VM: SQL Server 2022 Developer on Windows Server 2022, B2as_v2
+//     (2 vCPU AMD, 8 GB RAM), time zone UTC, boot diagnostics on
 //   - its disks: the OS disk (C:) and ONE separate, empty data disk for SQL
 //     Server's data and log files plus the application logs
 //
@@ -21,8 +21,8 @@ param tags object
 @maxLength(15)
 param vmName string
 
-@description('VM size. Standard_B2ms = 2 vCPU, 8 GB RAM (burstable).')
-param vmSize string = 'Standard_B2ms'
+@description('VM size. Standard_B2as_v2 = 2 vCPU (AMD), 8 GB RAM, burstable, no temporary disk.')
+param vmSize string = 'Standard_B2as_v2'
 
 @description('Windows administrator username for RDP. Not "admin" or "administrator" (Azure rejects common names).')
 param adminUsername string

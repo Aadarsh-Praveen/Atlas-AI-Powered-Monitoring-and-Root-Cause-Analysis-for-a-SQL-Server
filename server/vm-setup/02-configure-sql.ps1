@@ -25,7 +25,7 @@
     Safe to re-run: each setting is read first and changed only if different.
 
 .PARAMETER MaxServerMemoryMB
-    Cap on SQL Server's memory in MB. Default 5120 for the 8 GB B2ms.
+    Cap on SQL Server's memory in MB. Default 5120 for the 8 GB B2as_v2.
 
 .PARAMETER DataPath
     Default folder for new data files. Default F:\SQLData (from script 01).
@@ -66,13 +66,36 @@ if (-not (Get-Command sqlcmd -ErrorAction SilentlyContinue)) {
 # Run one query against the local default instance with Windows auth.
 #   -E  Windows authentication     -b  exit code 1 on any SQL error
 #   -h -1 -W  no headers, trimmed values (easy to read back into PowerShell)
+#   -s "|"    columns separated by "|", so multi-column rows split reliably
+#
+# Returns the non-empty output lines, one string per row.
+# IMPORTANT: PowerShell unwraps a function's output. One line comes back as a
+# plain [string], not an array, and then $result[0] is its first CHARACTER and
+# $result.Count fails under Set-StrictMode. So callers always wrap the call,
+# @(Invoke-Sql ...), or use Get-SqlValue / Get-SqlInt below.
 function Invoke-Sql([string]$Query) {
-    $output = & sqlcmd -S localhost -E -b -h -1 -W -Q "SET NOCOUNT ON; $Query" 2>&1
+    $output = & sqlcmd -S localhost -E -b -h -1 -W -s '|' -Q "SET NOCOUNT ON; $Query" 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "sqlcmd failed:`n$($output -join "`n")"
     }
-    # Return non-empty lines as strings.
-    return @($output | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
+    $output | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' }
+}
+
+# The first row of a query that returns one value, as a string.
+function Get-SqlValue([string]$Query) {
+    $rows = @(Invoke-Sql $Query)
+    if ($rows.Count -eq 0) { throw "The query returned no rows: $Query" }
+    return [string]$rows[0]
+}
+
+# The same, parsed as a whole number (fails loudly instead of guessing).
+function Get-SqlInt([string]$Query) {
+    $text = Get-SqlValue $Query
+    $number = 0
+    if (-not [int]::TryParse($text, [ref]$number)) {
+        throw "Expected a number from SQL Server but got '$text': $Query"
+    }
+    return $number
 }
 
 # T-SQL string literal: N'...' with quotes doubled.
@@ -88,7 +111,7 @@ function Wait-SqlReady([int]$TimeoutSeconds = 90) {
 }
 
 Write-Step "Connecting to SQL Server"
-$version = ((Invoke-Sql "SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(50)) + N' ' + CAST(SERVERPROPERTY('Edition') AS nvarchar(100));")[0])
+$version = Get-SqlValue "SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(50)) + N' ' + CAST(SERVERPROPERTY('Edition') AS nvarchar(100));"
 Write-Ok "Connected: SQL Server $version"
 
 # -----------------------------------------------------------------------------
@@ -101,7 +124,7 @@ if ($MaxServerMemoryMB -gt ($totalRamMB - 2048)) {
     Write-Warning "Max server memory $MaxServerMemoryMB MB leaves less than 2 GB of the VM's $totalRamMB MB for Windows, the API, and Caddy."
 }
 
-$currentMemoryMB = [int]((Invoke-Sql "SELECT CAST(value_in_use AS int) FROM sys.configurations WHERE name = N'max server memory (MB)';")[0])
+$currentMemoryMB = Get-SqlInt "SELECT CAST(value_in_use AS int) FROM sys.configurations WHERE name = N'max server memory (MB)';"
 if ($currentMemoryMB -eq $MaxServerMemoryMB) {
     Write-Skip "Already $MaxServerMemoryMB MB."
 }
@@ -125,8 +148,9 @@ foreach ($path in @($DataPath, $LogPath)) {
 }
 
 function Get-DefaultPaths {
-    $rows = Invoke-Sql "SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(260)); SELECT CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS nvarchar(260));"
-    return @{ Data = $rows[0].TrimEnd('\'); Log = $rows[1].TrimEnd('\') }
+    $rows = @(Invoke-Sql "SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(260)); SELECT CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS nvarchar(260));")
+    if ($rows.Count -ne 2) { throw "Expected 2 rows (data path, log path) but got $($rows.Count): $($rows -join ' / ')" }
+    return @{ Data = ([string]$rows[0]).TrimEnd('\'); Log = ([string]$rows[1]).TrimEnd('\') }
 }
 
 $current = Get-DefaultPaths
@@ -166,7 +190,7 @@ EXEC master.dbo.xp_instance_regwrite N'HKEY_LOCAL_MACHINE', N'Software\Microsoft
 # -----------------------------------------------------------------------------
 Write-Step "SQL authentication"
 
-$integratedOnly = [int]((Invoke-Sql "SELECT CAST(SERVERPROPERTY('IsIntegratedSecurityOnly') AS int);")[0])
+$integratedOnly = Get-SqlInt "SELECT CAST(SERVERPROPERTY('IsIntegratedSecurityOnly') AS int);"
 if ($integratedOnly -eq 1) {
     throw ("SQL Server is in Windows-authentication-only mode, so the API and the database tools can't log in. " +
            "In the portal: SQL virtual machine prod-sql-01 > Security configuration > enable SQL Authentication, then re-run.")
@@ -175,11 +199,14 @@ Write-Ok "Mixed mode: SQL logins are allowed."
 
 if ($SqlAdminUser) {
     $name = ConvertTo-SqlLiteral $SqlAdminUser
-    $row = Invoke-Sql "SELECT CAST(is_disabled AS int), IS_SRVROLEMEMBER(N'sysadmin', name) FROM sys.server_principals WHERE name = $name AND type = 'S';"
-    if ($row.Count -eq 0) {
+    # @(...) keeps a single row as a one-item array (see Invoke-Sql).
+    $rows = @(Invoke-Sql "SELECT CAST(is_disabled AS int), IS_SRVROLEMEMBER(N'sysadmin', name) FROM sys.server_principals WHERE name = $name AND type = 'S';")
+    if ($rows.Count -eq 0) {
         throw "SQL login '$SqlAdminUser' doesn't exist. Check sqlAdminUsername in infra/prod.parameters.local.json."
     }
-    $parts = $row[0] -split '\s+'
+    # One row, two columns separated by "|": is_disabled|is_sysadmin
+    $parts = @(([string]$rows[0]).Split('|') | ForEach-Object { $_.Trim() })
+    if ($parts.Count -ne 2) { throw "Unexpected result for login '$SqlAdminUser': $($rows[0])" }
     if ($parts[0] -ne '0') { throw "SQL login '$SqlAdminUser' exists but is disabled." }
     if ($parts[1] -ne '1') { throw "SQL login '$SqlAdminUser' exists but isn't a sysadmin." }
     Write-Ok "SQL admin login '$SqlAdminUser' exists, is enabled, and is sysadmin."

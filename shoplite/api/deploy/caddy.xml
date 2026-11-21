@@ -6,15 +6,15 @@
 
       C:\services\caddy\caddy.exe        Caddy for Windows amd64, from caddyserver.com
       C:\services\caddy\caddy-svc.exe    WinSW-x64.exe, renamed
-      C:\services\caddy\caddy-svc.xml    a copy of THIS file, with SHOPLITE_API_HOST filled in
+      C:\services\caddy\caddy-svc.xml    a copy of THIS file
       C:\services\caddy\data\            certificates and keys (created by Caddy)
 
   The WinSW wrapper is named caddy-svc so it doesn't clash with caddy.exe in
   the same folder.
 
-  Before installing, replace the SHOPLITE_API_HOST value below (in the COPY in
-  C:\services\caddy, not in the repo) with your DNS name, the "fqdn" output of
-  the Bicep deployment.
+  SHOPLITE_API_HOST below is production's DNS name (the "fqdn" output of the
+  Bicep deployment). If the DNS label or region ever changes, update it here
+  and in the installed copy, then reinstall the service.
 -->
 <service>
   <id>caddy</id>
@@ -27,9 +27,9 @@
   <arguments>run --config C:\atlas\shoplite\api\deploy\Caddyfile --adapter caddyfile</arguments>
   <workingdirectory>C:\services\caddy</workingdirectory>
 
-  <!-- The site address used by the Caddyfile ({$SHOPLITE_API_HOST}).
-       REPLACE in the installed copy, e.g. shoplite-yourname.eastus2.cloudapp.azure.com -->
-  <env name="SHOPLITE_API_HOST" value="replace-me.eastus2.cloudapp.azure.com" />
+  <!-- The site address used by the Caddyfile ({$SHOPLITE_API_HOST}): the
+       VM's public DNS name. Caddy gets the certificate for exactly this name. -->
+  <env name="SHOPLITE_API_HOST" value="shoplite-aadarsh.northcentralus.cloudapp.azure.com" />
 
   <!-- Where Caddy keeps its certificates and its account with Let's Encrypt.
        Without this, it would use the service account's profile folder, which
