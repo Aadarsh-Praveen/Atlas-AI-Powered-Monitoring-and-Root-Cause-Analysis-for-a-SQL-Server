@@ -74,11 +74,23 @@ if (-not (Get-Command sqlcmd -ErrorAction SilentlyContinue)) {
 # $result.Count fails under Set-StrictMode. So callers always wrap the call,
 # @(Invoke-Sql ...), or use Get-SqlValue / Get-SqlInt below.
 function Invoke-Sql([string]$Query) {
-    $output = & sqlcmd -S localhost -E -b -h -1 -W -s '|' -Q "SET NOCOUNT ON; $Query" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "sqlcmd failed:`n$($output -join "`n")"
+    # Windows PowerShell 5.1 turns redirected stderr lines into error records,
+    # which would stop the script (ErrorActionPreference 'Stop') before our own
+    # message. Relax it for this call; success is judged by the exit code.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& sqlcmd -S localhost -E -b -h -1 -W -s '|' -Q "SET NOCOUNT ON; $Query" 2>&1 |
+                    ForEach-Object { "$_" })
+        $exitCode = $LASTEXITCODE
     }
-    $output | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($exitCode -ne 0) {
+        throw "sqlcmd failed (exit code $exitCode):`n$($output -join "`n")"
+    }
+    $output | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
 }
 
 # The first row of a query that returns one value, as a string.

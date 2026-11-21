@@ -81,14 +81,38 @@ function Stop-Deploy([string]$Message) {
 }
 
 # Run git in the repo; stop the deploy if it fails. Returns its output lines.
-# PowerShell unwraps a single line into a plain [string], so callers wrap the
-# call in @(...) before indexing; otherwise [0] would be the first character.
-function Invoke-Git {
-    $output = & git -C $RepoPath @args 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Stop-Deploy "git $($args -join ' ') failed:`n$($output -join "`n")"
+# Run a native program (git, py, pip, caddy) and return its output as text
+# lines; stop the deploy, with that output, if it fails.
+#
+# Why this wrapper: in Windows PowerShell 5.1, when a native program's stderr
+# is redirected (2>&1), EVERY stderr line becomes an error record, and with
+# $ErrorActionPreference = 'Stop' (top of this script) the first one stops the
+# script, even when the program succeeds. git writes normal progress to stderr
+# ("From https://github.com/..."), and Caddy writes its log lines there. So:
+# relax the preference to 'Continue' for this one call, turn every line (stdout
+# or stderr) into plain text, and judge success ONLY by the exit code.
+function Invoke-Native {
+    param([string]$Exe, [string[]]$Arguments, [string]$What)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& $Exe @Arguments 2>&1 | ForEach-Object { "$_" })
+        $exitCode = $LASTEXITCODE
     }
-    $output | ForEach-Object { "$_" }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($exitCode -ne 0) {
+        Stop-Deploy "$What failed (exit code $exitCode):`n$($output -join "`n")"
+    }
+    $output
+}
+
+# git in the repo, through Invoke-Native. PowerShell unwraps a single line into
+# a plain [string], so callers wrap the call in @(...) before indexing;
+# otherwise [0] would be the first character.
+function Invoke-Git {
+    Invoke-Native -Exe 'git' -Arguments (@('-C', $RepoPath) + @($args)) -What "git $($args -join ' ')"
 }
 
 # -----------------------------------------------------------------------------
@@ -144,11 +168,13 @@ if ($changedFiles -contains 'shoplite/api/deploy/shoplite-api.xml' -or $changedF
 Write-Step "Requirements"
 if (-not (Test-Path -LiteralPath $venvPython)) {
     Write-Host "Creating the virtual environment shoplite\api\.venv..."
-    & py -3.12 -m venv (Join-Path $apiDir '.venv')
-    if ($LASTEXITCODE -ne 0) { Stop-Deploy "Couldn't create the virtual environment with 'py -3.12'." }
+    $null = Invoke-Native -Exe 'py' -Arguments @('-3.12', '-m', 'venv', (Join-Path $apiDir '.venv')) `
+                          -What "Creating the virtual environment with 'py -3.12'"
 }
-& $venvPython -m pip install --disable-pip-version-check --quiet -r $requirements
-if ($LASTEXITCODE -ne 0) { Stop-Deploy "pip install failed. The service wasn't restarted, so the previous version is still running." }
+# pip prints warnings to stderr even on success; only its exit code counts.
+$null = Invoke-Native -Exe $venvPython `
+                      -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', '-r', $requirements) `
+                      -What "pip install (the service wasn't restarted, so the previous version is still running)"
 Write-Ok "Requirements installed."
 
 # -----------------------------------------------------------------------------
@@ -179,10 +205,9 @@ Write-Ok "APP_VERSION $previousVersion -> $Version"
 # -----------------------------------------------------------------------------
 Write-Step "Restart"
 if ($changedFiles -contains 'shoplite/api/deploy/Caddyfile') {
-    & $caddyExe validate --config $caddyfile --adapter caddyfile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Stop-Deploy "The new Caddyfile is invalid; Caddy and the API were NOT restarted. Check it with: $caddyExe validate --config $caddyfile --adapter caddyfile"
-    }
+    # Caddy logs to stderr even when the file is valid; only the exit code counts.
+    $null = Invoke-Native -Exe $caddyExe -Arguments @('validate', '--config', $caddyfile, '--adapter', 'caddyfile') `
+                          -What "Validating the new Caddyfile (Caddy and the API were NOT restarted)"
     Restart-Service -Name $caddyService
     Write-Ok "Caddyfile changed: Caddy restarted."
 }

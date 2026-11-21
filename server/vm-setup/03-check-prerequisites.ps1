@@ -46,12 +46,18 @@ function Write-Fail([string]$Name, [string]$Detail, [string]$Fix) {
 # Run a command and return its first line of output, or $null if it fails.
 function Get-CommandOutput([string]$Command, [string[]]$Arguments) {
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) { return $null }
+    # Some tools print their version (or harmless notes) to stderr; in Windows
+    # PowerShell 5.1 that would raise an error here. Relax the preference for
+    # this call and judge success by the exit code.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
-        $output = & $Command @Arguments 2>&1
+        $output = @(& $Command @Arguments 2>&1 | ForEach-Object { "$_" })
         if ($LASTEXITCODE -ne 0) { return $null }
         return ("$($output | Select-Object -First 1)").Trim()
     }
     catch { return $null }
+    finally { $ErrorActionPreference = $previous }
 }
 
 Write-Host "`nChecking prerequisites on $env:COMPUTERNAME`n" -ForegroundColor Cyan
