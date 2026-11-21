@@ -1,0 +1,80 @@
+# .gitignore: files Git must never track, for every folder in the repo.
+# Patterns without a leading "/" match at any depth, so one rule covers
+# shoplite/api, atlas/api, tools, and so on.
+
+# ---------------------------------------------------------------------------
+# Secrets
+# Every component reads passwords and keys from a .env file. Those files must
+# never reach GitHub, even in a private repo. Only the .env.example templates
+# (placeholder values, no real secrets) are committed.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Python (ShopLite API, Atlas API, MCP servers, tools, traffic)
+# Virtual environments are rebuilt from requirements.txt on each machine, and
+# caches are regenerated automatically, so neither belongs in Git.
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# ---------------------------------------------------------------------------
+# Node.js and Next.js (storefront, Atlas dashboard)
+# node_modules is reinstalled from package-lock.json; .next and out are build
+# output; .vercel holds local Vercel CLI project links.
+# ---------------------------------------------------------------------------
+node_modules/
+.next/
+out/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---------------------------------------------------------------------------
+# Logs
+# Local run logs can contain connection details and are noisy in diffs.
+# ---------------------------------------------------------------------------
+*.log
+logs/
+
+# ---------------------------------------------------------------------------
+# Bicep / Azure (from Phase 2)
+# *.local.json parameter files hold values for your own subscription
+# (names, IPs, sometimes secrets). The shared parameter files are committed;
+# the local overrides are not.
+# ---------------------------------------------------------------------------
+*.local.json
+.azure/
+
+# ---------------------------------------------------------------------------
+# Project docs
+# The planning docs, phase files, build log, and design references stay on
+# this machine only (owner's choice); they aren't pushed to GitHub.
+# ---------------------------------------------------------------------------
+/docs/
+
+# ---------------------------------------------------------------------------
+# macOS and editors
+# Per-machine files that mean nothing to anyone else.
+# ---------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+._*
+.vscode/
+.idea/
+*.swp
+*~

@@ -1,0 +1,8 @@
+# Packages for tools/check_local.py. Install into a virtual environment:
+#   pip install -r tools/requirements.txt
+# Ranges allow bug-fix and minor updates but not new major versions,
+# which could contain breaking changes.
+
+pyodbc>=5.2,<6            # SQL Server via Microsoft ODBC Driver 18 (installed separately with Homebrew)
+psycopg[binary]>=3.2,<4   # Postgres; [binary] bundles libpq so nothing else needs installing
+python-dotenv>=1.0,<2     # reads the root .env file into environment variables

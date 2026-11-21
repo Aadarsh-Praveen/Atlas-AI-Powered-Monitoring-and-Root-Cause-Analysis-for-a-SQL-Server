@@ -1,0 +1,10 @@
+# Packages for shoplite/db/apply_schema.py and seed.py. Install into the root
+# virtual environment:
+#   pip install -r shoplite/db/requirements.txt
+# Ranges match tools/requirements.txt so both install cleanly side by side.
+# Everything else (random, argparse, decimal, datetime) is standard library;
+# the seed deliberately avoids Faker so its output can't change between
+# library versions.
+
+pyodbc>=5.2,<6            # SQL Server via Microsoft ODBC Driver 18 (installed separately with Homebrew)
+python-dotenv>=1.0,<2     # reads the root .env file into environment variables

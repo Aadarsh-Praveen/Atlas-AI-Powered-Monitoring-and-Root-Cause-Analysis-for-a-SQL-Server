@@ -1,0 +1,88 @@
+# docker-compose.yml: local development databases (Phase 0).
+#
+# Production (from Phase 2) is SQL Server on the Azure VM prod-sql-01 and a
+# managed vendor Postgres. This file gives you a free, private copy of both on
+# your Mac so ShopLite can be built and broken locally first.
+#
+# Usage (run from the repo root):
+#   docker compose up -d     start both databases in the background
+#   docker compose ps        wait until both show "healthy"
+#   docker compose down      stop them (data stays in the named volumes)
+#
+# Passwords come from the root .env file, which Compose reads automatically.
+# The ${VAR:?message} syntax makes Compose refuse to start and print the
+# message if a variable is missing, instead of starting with a blank password.
+
+# Fixed project name, so volumes are called atlas_<volume> regardless of what
+# the repo folder is named on disk.
+name: atlas
+
+services:
+
+  # -------------------------------------------------------------------------
+  # SQL Server 2022 Developer: local stand-in for SalesDB / ReportingDB on
+  # prod-sql-01. Developer edition has every Enterprise feature but is free
+  # for non-production use.
+  # -------------------------------------------------------------------------
+  shoplite-sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: shoplite-sql
+    # Microsoft only publishes this image for Intel (x86-64). On Apple Silicon,
+    # Docker runs it through Rosetta emulation (enable it in Docker Desktop).
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"          # required by the image; you accept the licence
+      MSSQL_PID: "Developer"    # edition: free, full-featured, not for production
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD:?SA_PASSWORD is not set. Copy .env.example to .env and fill it in.}
+    ports:
+      # host:container. Bound to 127.0.0.1 so only your Mac can connect,
+      # not other devices on your network.
+      - "127.0.0.1:1433:1433"
+    volumes:
+      # Databases, logs, and config live here, so they survive the container
+      # being stopped, removed, or recreated.
+      - shoplite-sql-data:/var/opt/mssql
+    healthcheck:
+      # Runs inside the container: log in as sa and run SELECT 1.
+      # -C trusts the server's self-signed certificate (ODBC 18 encrypts by
+      # default). -b makes sqlcmd exit non-zero on error so Docker sees a failure.
+      # $$ escapes the $ so the container's shell (not Compose) expands it.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q \"SELECT 1\" -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      # SQL Server is slow to start the first time, slower still under Rosetta.
+      # Failures during this window don't count against the retries.
+      start_period: 90s
+
+  # -------------------------------------------------------------------------
+  # Postgres 16: local stand-in for the vendor's managed Postgres (supplier
+  # prices and stock), which the nightly ETL will read in Phase 4.
+  # -------------------------------------------------------------------------
+  vendor-pg:
+    image: postgres:16
+    container_name: vendor-pg
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is not set. Copy .env.example to .env and fill it in.}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set. Copy .env.example to .env and fill it in.}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is not set. Copy .env.example to .env and fill it in.}
+    ports:
+      # host:container. The Mac side is 5433, not Postgres's usual 5432,
+      # because a locally installed Postgres already uses 5432 on this Mac.
+      # Inside the container Postgres still listens on 5432.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - vendor-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready ships with Postgres and checks the server accepts connections.
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+# Named volumes are managed by Docker and outlive containers. Remove them only
+# with "docker compose down -v", which deletes all local database data.
+volumes:
+  shoplite-sql-data:
+  vendor-pg-data:

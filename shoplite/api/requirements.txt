@@ -1,0 +1,18 @@
+# Packages for the ShopLite API. Install into the root virtual environment:
+#   pip install -r shoplite/api/requirements.txt
+# Ranges allow bug-fix and minor updates but not new major versions.
+# Caveat: FastAPI, Uvicorn, and httpx are still 0.x, and "<1" allows any 0.x
+# release. In 0.x, minor releases may include breaking changes. If an
+# upgrade breaks something, pin a tighter range (for example <0.116).
+
+# --- Application ---
+fastapi>=0.115,<1              # web framework: routing, validation, /docs
+uvicorn[standard]>=0.32,<1     # ASGI server that runs the app; [standard] adds faster event loop and HTTP parsing
+sqlalchemy>=2.0,<3             # Core only: engine, connection pool, parameterised SQL (no ORM)
+pyodbc>=5.2,<6                 # SQL Server via Microsoft ODBC Driver 18 (installed separately)
+pydantic>=2.9,<3               # request/response models and validation
+pydantic-settings>=2.6,<3      # reads and validates settings from shoplite/api/.env
+
+# --- Tests only (not needed to run the API) ---
+pytest>=8.3,<9                 # test runner for tests/
+httpx>=0.27,<1                 # required by FastAPI's TestClient
