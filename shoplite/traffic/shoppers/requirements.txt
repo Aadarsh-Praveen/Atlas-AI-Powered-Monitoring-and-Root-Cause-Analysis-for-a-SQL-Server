@@ -1,0 +1,9 @@
+# shoplite/traffic/shoppers/requirements.txt: the Playwright shoppers.
+#
+# After installing, download the browser once (Chromium only; it's all the
+# shoppers use, including the phone-sized "mobile" sessions):
+#   python -m playwright install chromium
+# On a fresh Linux machine (GitHub Actions does this in shoppers.yml), add
+# --with-deps to also install the system libraries Chromium needs.
+
+playwright>=1.48,<2

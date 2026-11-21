@@ -1,0 +1,97 @@
+# .github/workflows/shoppers.yml: simulated shoppers (Playwright) against the
+# production storefront during business hours.
+#
+# Schedule: every 20 minutes at :10, :30, :50 from 13:10 to 22:50 UTC, Mon-Fri
+# (9:10 AM-6:50 PM Boston in summer, 8:10 AM-5:50 PM in winter). Each run: 2
+# shoppers for 5 minutes (repository variables can change both).
+#
+# Safeguards:
+#   - Kill switch: the job only runs when the repository variable
+#     TRAFFIC_ENABLED is "true". Anything else and it's skipped.
+#   - Health check: if /health isn't ok (VM off, database down), the run skips
+#     quietly instead of failing.
+#   - One run at a time (concurrency group), and a hard time limit.
+#   - The admin token is passed only to the shopper step, never printed.
+#     Artifacts are uploaded only on failure and contain no admin traces
+#     (the admin persona never records one).
+#
+# Scheduled runs can start several minutes late or occasionally be skipped
+# when GitHub is busy; that's fine for synthetic traffic.
+
+name: Shoppers
+
+on:
+  schedule:
+    - cron: "10,30,50 13-22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Seconds to keep starting sessions"
+        default: "300"
+      concurrency:
+        description: "Shoppers at the same time (max 8)"
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shoppers
+  cancel-in-progress: false
+
+jobs:
+  shop:
+    if: vars.TRAFFIC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      STOREFRONT_URL: ${{ vars.STOREFRONT_URL }}
+      API_URL: ${{ vars.API_URL }}
+    steps:
+      - name: Check production health
+        id: health
+        run: |
+          if curl -fsS --max-time 15 "$API_URL/health" | grep -q '"status":"ok"'; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "## Shoppers skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "The API at $API_URL isn't healthy (the VM may be off). Nothing was run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.health.outputs.healthy == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.health.outputs.healthy == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: shoplite/traffic/shoppers/requirements.txt
+
+      - name: Install Playwright and Chromium
+        if: steps.health.outputs.healthy == 'true'
+        run: |
+          pip install -r shoplite/traffic/shoppers/requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run the shoppers
+        if: steps.health.outputs.healthy == 'true'
+        working-directory: shoplite/traffic/shoppers
+        env:
+          SHOPLITE_ADMIN_TOKEN: ${{ secrets.SHOPLITE_ADMIN_TOKEN }}
+          SHOPPERS_DURATION_SECONDS: ${{ inputs.duration || vars.SHOPPERS_DURATION_SECONDS || '300' }}
+          SHOPPERS_CONCURRENCY: ${{ inputs.concurrency || vars.SHOPPERS_CONCURRENCY || '2' }}
+          SHOPPERS_ARTIFACTS_DIR: ${{ github.workspace }}/shoppers-artifacts
+        # run.py writes the summary to $GITHUB_STEP_SUMMARY itself, and exits
+        # 1 only if a page was broken (it already skipped if /health failed).
+        run: python run.py --skip-health-check
+
+      - name: Upload screenshots and traces (failures only)
+        if: failure() && steps.health.outputs.healthy == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shoppers-failure-${{ github.run_id }}
+          path: shoppers-artifacts/
+          retention-days: 5
+          if-no-files-found: ignore

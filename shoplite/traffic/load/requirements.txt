@@ -1,0 +1,4 @@
+# shoplite/traffic/load/requirements.txt: Locust, the background load generator.
+# Runs on your Mac or GitHub Actions, never on the VM (see README.md).
+
+locust>=2.32,<3

@@ -18,6 +18,8 @@ Atlas resources here.
 | `modules/sql-vm.bicep` | SQL IaaS Agent registration: SQL authentication and local-only connectivity. |
 | `modules/auto-shutdown.bicep` | The daily shutdown schedule. |
 | `prod.parameters.example.json` | Placeholders for the non-secret values. Copy it to `prod.parameters.local.json` (Git ignores `*.local.json`). |
+| `github-oidc.md` | Phase 3: setting up GitHub Actions' passwordless sign-in to Azure (managed identity, federated credential, custom role on the VM only). |
+| `roles/shoplite-vm-operator.json` | The custom role that guide creates: read, instance view, start, and deallocate a VM, nothing else. |
 | `main.json` | **Generated**, not committed: `main.bicep` compiled to ARM JSON for portal deployments (`az bicep build`). Ignored by Git. |
 
 ## What gets created

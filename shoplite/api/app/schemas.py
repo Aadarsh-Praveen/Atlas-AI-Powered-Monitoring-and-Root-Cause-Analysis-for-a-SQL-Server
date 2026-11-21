@@ -252,6 +252,29 @@ class InventoryItem(BaseModel):
     updated_at: UtcDateTime
 
 
+class RestockRequest(RequestModel):
+    """POST /api/admin/restock: "receive a shipment".
+
+    Every product at or below its reorder level (and below the target) is
+    topped up to target_quantity, most urgent first, at most max_products
+    products per call. The limits keep one call to one short transaction.
+    """
+    target_quantity: int = Field(default=100, ge=1, le=1000,
+                                 description="Units on hand after restocking")
+    max_products: int = Field(default=500, ge=1, le=2000,
+                              description="Most products restocked in one call")
+
+
+class RestockResult(BaseModel):
+    """What one restock call did."""
+    products_restocked: int
+    units_added: int
+    target_quantity: int
+    # Still at or below their reorder level afterwards: more than max_products
+    # were due, or their reorder level is at or above target_quantity.
+    still_low: int
+
+
 class SalesReportRow(BaseModel):
     """One group in the sales report. Which label fields are set depends on
     group_by: sales_date (day), product_id/sku/product_name (product), or

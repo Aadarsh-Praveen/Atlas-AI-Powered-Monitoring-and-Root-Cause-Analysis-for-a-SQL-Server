@@ -57,10 +57,16 @@ for the API's).
 
 ## 4. Starting and stopping
 
-The VM is **deallocated every evening** by Azure's auto-shutdown schedule (`shutdown-computevm-prod-sql-01`,
-at the time set in Bicep, in UTC). Starting it is manual until Phase 3.
+The VM keeps **business hours** (Phase 3), all times UTC, Monday to Friday:
 
-From the Mac:
+| UTC | Boston, summer / winter | What | By |
+|---|---|---|---|
+| 13:00 | 9 AM / 8 AM | **Start** | `.github/workflows/vm-schedule.yml` (OIDC, managed identity) |
+| 23:00 | 7 PM / 6 PM | **Deallocate** | `vm-schedule.yml` |
+| 04:00 (daily) | 12 AM / 11 PM | **Safety-net shutdown** if the 23:00 run failed | Azure auto-shutdown `shutdown-computevm-prod-sql-01` (production's value; the Bicep default is 01:00) |
+
+Weekends it stays off. To start or stop it outside these hours, run `vm-schedule.yml` by hand
+(Actions → VM schedule → Run workflow), or from the Mac:
 
 ```bash
 az vm start      -g rg-shoplite-prod -n prod-sql-01      # start (about 2-3 minutes until the site answers)
@@ -294,3 +300,79 @@ up as error 18456 and a 503 from `/health`.
 - **`git pull` on the VM before copying any service file** (`shoplite-api.xml`, `caddy.xml`) into
   `C:\services`.
 - **Deallocate the VM** when you're done working on it, unless something needs it running.
+
+## 12. Simulated traffic (Phase 3)
+
+Production has customers on weekdays without anyone doing anything: simulated shoppers in real
+browsers, background API load, and a nightly restock. All of it runs from GitHub Actions, never on
+the VM. Details: `.github/workflows/README.md`.
+
+| Source | Schedule (UTC, Mon–Fri) | Tag in the API log |
+|---|---|---|
+| Playwright shoppers (`shoppers.yml`) | every 20 min, 13:10–22:50; 2 browsers for 5 minutes | `synthetic playwright/<persona>` (browser, searcher, buyer, loyal, admin) |
+| Locust load (`load.yml`) | 10 min at :35, 13:35–22:35, plus Fridays 16:00 and 17:00 for the flash sale | `synthetic locust/<type>` (browse, search, buyer, loyal, admin) |
+| Restock (`restock.yml`) | 22:45 | `synthetic workflow/restock` |
+| Real people (you, friends) | any time | `synthetic -` |
+
+### Pausing traffic (the kill switch)
+
+Set the repository variable **`TRAFFIC_ENABLED`** to `false` (Settings → Secrets and variables →
+Actions → Variables). Shoppers, load, and restock then show as **skipped**. The VM schedule keeps
+running; disable `vm-schedule.yml` too if the VM should stay off. **Pause traffic before
+maintenance, deployments, and incident experiments**, and set it back to `true` afterwards.
+
+Every traffic workflow also checks `/health` first and skips (green run, "skipped" in the summary)
+when the VM is off or the API is unhealthy.
+
+### Reading a run
+
+- **Shopper run:** the run summary has an outcome table (`paid`, `declined`, `out_of_stock`,
+  `abandoned`, `browsed`, `searched`, `empty_search`, `reordered`, `admin_done`, `unavailable`,
+  `error`), a persona table, and the API status codes the browsers saw. Only `error` (a broken page)
+  turns the run red; then the `shoppers-failure-<id>` artifact has a screenshot and a trace (open the
+  trace at https://trace.playwright.dev). An error's detail names the action, the `data-testid`
+  element, Playwright's reason, and the last step.
+- **Locust run:** the `locust-report-<id>` artifact has per-endpoint request counts, failures, and
+  response-time percentiles. A red run means Locust counted failures: 503s or unexpected errors.
+- **Restock run:** the summary shows products restocked, units added, and how many are still low.
+
+### What normal looks like
+
+**Volume:** on a normal business day, roughly 100–150 new orders in total (shoppers about 50–70,
+Locust about 35–80), a peak of a few requests per second at midday and early evening, and a short
+burst during the Friday flash sale. Weekends and nights: nothing (the VM is off).
+
+**API log** (`F:\Logs\shoplite-api\shoplite-api.err.log`): mostly `200`s tagged `synthetic playwright/…`
+and `synthetic locust/…`; a few `409`s (stock ran out, normal); `201`s on `/api/checkout`; occasional
+`401`s only from a misconfigured admin token. **503s are not normal**: see section 7.
+
+**Outcomes:** about 2% of payments declined (the simulated provider), a few `out_of_stock`, many
+`browsed` and `searched`, and some `empty_search` (typos and things the store doesn't sell, on
+purpose).
+
+**SQL Server** (as the SQL admin, `sqlcmd -S localhost -E -d SalesDB`):
+
+```sql
+-- Today's orders by hour (UTC) and how they ended
+SELECT DATEPART(hour, created_at) AS hour_utc,
+       COUNT(*) AS orders,
+       SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paid,
+       SUM(CASE WHEN status = 'payment_failed' THEN 1 ELSE 0 END) AS declined
+FROM dbo.orders
+WHERE created_at >= CAST(SYSUTCDATETIME() AS date)
+GROUP BY DATEPART(hour, created_at)
+ORDER BY hour_utc;
+
+-- Open carts (abandoned carts accumulate; that's realistic)
+SELECT COUNT(*) AS open_carts FROM dbo.carts WHERE status = 'open';
+
+-- Low stock before/after the nightly restock
+SELECT COUNT(*) AS at_or_below_reorder FROM dbo.inventory WHERE quantity_on_hand <= reorder_level;
+```
+
+Synthetic orders are ordinary orders for randomly chosen demo customers; only the API log's tag tells
+them apart. That's on purpose: the database and the API treat them exactly like real ones.
+
+**CPU credits:** under normal traffic, **CPU Credits Remaining** (VM → Metrics) should stay well
+above zero all day. If it trends toward zero, lower `LOAD_PEAK_USERS` or `SHOPPERS_CONCURRENCY`
+(repository variables). Running out of credits on purpose is a Phase 5 incident, not normal traffic.

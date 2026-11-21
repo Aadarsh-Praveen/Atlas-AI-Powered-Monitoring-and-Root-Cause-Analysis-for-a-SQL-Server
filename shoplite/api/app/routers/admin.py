@@ -1,8 +1,12 @@
-"""Admin endpoints: inventory and the two sales reports.
+"""Admin endpoints: inventory, restocking, and the two sales reports.
 
 !!! DEMO ADMIN ACCESS, NOT REAL AUTHENTICATION.
 !!! Every admin request must send X-Admin-Token equal to ADMIN_TOKEN from
 !!! shoplite/api/.env. It's one shared secret with no users, roles, or expiry.
+
+Restocking ("receive a shipment", Phase 3) tops up low-stock products so
+simulated purchases don't slowly empty the store. A nightly GitHub Actions
+workflow calls it; Phase 4's vendor ETL may take the job over.
 
 The reports call the stored procedures in shoplite/db/005_report_procedures.sql.
 They're deliberately heavy queries over order history, running against the
@@ -11,6 +15,7 @@ parameters; when they reject them (THROW 50001-50003), this router returns
 400 with the procedure's message.
 """
 
+import logging
 import math
 import secrets
 from datetime import date, datetime, timedelta, timezone
@@ -21,8 +26,10 @@ from sqlalchemy.exc import DBAPIError
 
 from app.config import get_settings
 from app.db import describe_sql_error, get_engine, is_report_input_error
-from app.schemas import (ErrorResponse, InventoryItem, Page, SalesReport, SalesReportRow,
-                         TopProductRow, TopProductsReport)
+from app.schemas import (ErrorResponse, InventoryItem, Page, RestockRequest, RestockResult, SalesReport,
+                         SalesReportRow, TopProductRow, TopProductsReport)
+
+logger = logging.getLogger("shoplite.admin")
 
 
 def require_admin(x_admin_token: str | None = Header(default=None, description="Demo admin token")) -> None:
@@ -96,6 +103,48 @@ def inventory(
         total_items=total,
         total_pages=math.ceil(total / page_size) if total else 0,
     )
+
+
+@router.post("/restock", response_model=RestockResult, responses=ADMIN_ERRORS,
+             summary="Receive a shipment: top up low-stock products to a target quantity")
+def restock(request: RestockRequest | None = None):
+    """Top up every product at or below its reorder level to target_quantity.
+
+    One short transaction:
+      - picks the most urgent products first (lowest stock), at most
+        max_products of them, and only those still below the target;
+      - sets their quantity_on_hand to the target in a single UPDATE, which
+        takes row locks only on the rows it changes (checkout's UPDLOCK on the
+        same rows simply waits a moment);
+      - OUTPUT returns how many units each row gained, so the summary is
+        exact even if a checkout changed a row just before.
+    An empty body (or none) uses the defaults: 100 units, at most 500 products.
+    """
+    request = request or RestockRequest()
+    with get_engine().begin() as conn:
+        added = conn.execute(text("""
+            WITH due AS (
+                SELECT TOP (:max_products) product_id, quantity_on_hand, updated_at
+                FROM dbo.inventory
+                WHERE quantity_on_hand <= reorder_level
+                  AND quantity_on_hand < :target
+                ORDER BY quantity_on_hand ASC, product_id
+            )
+            UPDATE due
+            SET quantity_on_hand = :target,
+                updated_at       = SYSUTCDATETIME()
+            OUTPUT inserted.quantity_on_hand - deleted.quantity_on_hand AS units_added;
+        """), {"max_products": request.max_products, "target": request.target_quantity}).scalars().all()
+
+        still_low = conn.execute(text(
+            "SELECT COUNT(*) FROM dbo.inventory WHERE quantity_on_hand <= reorder_level;"
+        )).scalar_one()
+
+    result = RestockResult(products_restocked=len(added), units_added=sum(added),
+                           target_quantity=request.target_quantity, still_low=still_low)
+    logger.info("Restock: %d products topped up to %d (+%d units); %d still at or below reorder level",
+                result.products_restocked, result.target_quantity, result.units_added, result.still_low)
+    return result
 
 
 @router.get("/reports/sales", response_model=SalesReport, responses=REPORT_ERRORS,

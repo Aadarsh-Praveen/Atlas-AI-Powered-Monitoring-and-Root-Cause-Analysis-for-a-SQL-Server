@@ -39,7 +39,11 @@ Prerequisites: the Phase 0 containers are healthy, and SalesDB has been built an
 
    `--reload` restarts the server when code changes (development only). `--no-access-log` turns
    off Uvicorn's own per-request lines, because the API logs each request itself, with its request
-   ID, duration, and customer.
+   ID, duration, customer, and synthetic tag:
+
+   ```
+   2026-11-21 14:03:22,123 INFO    shoplite.request [9f2c...] GET /api/products?q=drill -> 200 in 41 ms (customer -, synthetic playwright/searcher)
+   ```
 
 4. Open the interactive docs at <http://localhost:8000/docs>.
 
@@ -51,6 +55,7 @@ Prerequisites: the Phase 0 containers are healthy, and SalesDB has been built an
 | `X-Admin-Token` | request | Admin endpoints; must match `ADMIN_TOKEN` |
 | `X-Request-ID` | both | Correlates one request across logs; generated if the caller doesn't send one |
 | `X-App-Version` | response | The API version that handled the request (`APP_VERSION`) |
+| `X-Synthetic-Source` | request | Marks simulated traffic, e.g. `playwright/buyer`, `locust/browse` (Phase 3). Logged with the request and **otherwise ignored**: tagged and untagged requests behave the same. Letters, digits, and `. _ - /`, at most 64 characters; anything else is logged as `-` (untagged), never rejected. Allowed by CORS, so the storefront's browser shoppers can send it. |
 
 The API also tags its SQL Server sessions with the program name `ShopLite-API/<version>`, so they
 can be found in `sys.dm_exec_sessions`.
@@ -76,6 +81,13 @@ can be found in `sys.dm_exec_sessions`.
 | Admin | `GET /api/admin/inventory` | Inventory with a low-stock filter |
 | | `GET /api/admin/reports/sales` | Sales by day, product, or state over a date range |
 | | `GET /api/admin/reports/top-products` | Best sellers over a date range |
+| | `POST /api/admin/restock` | "Receive a shipment": tops up products at or below their reorder level to `target_quantity` (default 100, 1–1,000), lowest stock first, at most `max_products` per call (default 500, 1–2,000). One short transaction. Returns `products_restocked`, `units_added`, `target_quantity`, `still_low`. An empty body uses the defaults. Called nightly by `.github/workflows/restock.yml`. |
+
+### What's new in 1.1.0 (Phase 3)
+
+- `X-Synthetic-Source` is accepted (CORS) and written into every request's log line.
+- `POST /api/admin/restock` keeps simulated shopping from emptying the shelves.
+- Deploy with `deploy.ps1 -Version 1.1.0`; no database changes.
 
 ### Checkout in three steps
 
@@ -104,7 +116,8 @@ Errors return JSON `{"detail": "..."}` with the request ID in the `X-Request-ID`
 
 ## Tests
 
-Smoke tests run against the local SalesDB (seeded) and change data like a real shopper would:
+Smoke tests run against the local SalesDB (seeded) and change data like a real shopper would. The
+restock test restocks exactly one low-stock product per run. **Never run them against production.**
 
 ```bash
 cd shoplite/api

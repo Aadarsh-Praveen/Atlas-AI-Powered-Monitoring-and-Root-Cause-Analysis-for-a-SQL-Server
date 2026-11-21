@@ -1,0 +1,100 @@
+# .github/workflows/vm-schedule.yml: start prod-sql-01 at the start of ShopLite's
+# business hours and deallocate it at the end, so it isn't billing overnight.
+#
+# Schedule (cron is always UTC; Boston shifts by an hour with daylight saving):
+#   start       13:00 UTC Mon-Fri = 9 AM Boston in summer (EDT), 8 AM in winter (EST)
+#   deallocate  23:00 UTC Mon-Fri = 7 PM Boston in summer,        6 PM in winter
+# The VM's own auto-shutdown (04:00 UTC) stays as a safety net if the 23:00
+# run is late or fails. Weekends: the VM stays off.
+#
+# Sign-in: OpenID Connect (OIDC). GitHub gives this run a short-lived token,
+# and Azure trusts it because a user-assigned managed identity has a federated
+# credential for this repo's main branch. No Azure password or key is stored
+# in GitHub. The identity can only read, start, and deallocate prod-sql-01
+# (a custom role scoped to that one VM). Setup: docs in B5 (OIDC guide).
+#
+# Not affected by TRAFFIC_ENABLED: pausing traffic doesn't change the VM's hours.
+
+name: VM schedule
+
+on:
+  schedule:
+    - cron: "0 13 * * 1-5"      # start
+    - cron: "0 23 * * 1-5"      # deallocate
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do with prod-sql-01"
+        type: choice
+        options: [start, deallocate]
+        default: start
+
+permissions:
+  id-token: write               # request the OIDC token for Azure sign-in
+  contents: read
+
+concurrency:
+  group: vm-schedule            # never start and stop at the same time
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: rg-shoplite-prod
+  VM_NAME: prod-sql-01
+
+jobs:
+  vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Decide start or deallocate
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            action="${{ inputs.action }}"
+          elif [ "${{ github.event.schedule }}" = "0 13 * * 1-5" ]; then
+            action=start
+          else
+            action=deallocate
+          fi
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "Action: $action"
+
+      - name: Sign in to Azure (OIDC, no stored password)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Start the VM
+        if: steps.decide.outputs.action == 'start'
+        run: az vm start --resource-group "$RESOURCE_GROUP" --name "$VM_NAME"
+
+      - name: Deallocate the VM (stops compute billing)
+        if: steps.decide.outputs.action == 'deallocate'
+        run: az vm deallocate --resource-group "$RESOURCE_GROUP" --name "$VM_NAME"
+
+      - name: Report the power state
+        if: always()
+        run: |
+          state=$(az vm get-instance-view --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" \
+            --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus" -o tsv || echo unknown)
+          echo "prod-sql-01: $state"
+          echo "### prod-sql-01: ${{ steps.decide.outputs.action }} → **$state**" >> "$GITHUB_STEP_SUMMARY"
+
+      # Information only: the services start on their own after boot. This
+      # shows how long until the API answers, and never fails the run.
+      - name: Wait for the API to come up
+        if: steps.decide.outputs.action == 'start' && vars.API_URL != ''
+        continue-on-error: true
+        run: |
+          for i in $(seq 1 40); do
+            if curl -fsS --max-time 10 "${{ vars.API_URL }}/health" | grep -q '"status":"ok"'; then
+              echo "API healthy after about $((i * 15)) seconds."
+              echo "API healthy after about $((i * 15)) seconds." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "API not healthy after 10 minutes; check the VM (runbook, 'When the site is down')."
+          echo "⚠️ API not healthy after 10 minutes." >> "$GITHUB_STEP_SUMMARY"

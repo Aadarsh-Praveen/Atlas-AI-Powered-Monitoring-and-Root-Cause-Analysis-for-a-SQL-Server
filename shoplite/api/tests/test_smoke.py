@@ -1,12 +1,15 @@
 """Smoke tests for ShopLite's main flows: catalog, cart, checkout, out of
-stock, orders, and admin reports.
+stock, orders, admin reports and restocking, and the synthetic-traffic tag.
 
 "Smoke" means: quick checks that the important paths work end to end against
 the real local database. Not exhaustive.
 """
 
+import logging
 import math
 from decimal import Decimal
+
+import pytest
 
 from app.config import get_settings
 from app.pricing import FREE_SHIPPING_FROM, SHIPPING_COST, shipping_cost_for
@@ -228,3 +231,63 @@ def test_report_procedure_errors_become_400_with_message(client, admin_headers):
         assert response.status_code == 400, path
         assert response.json()["detail"].startswith(message)
         assert "[SQL Server]" not in response.json()["detail"]         # driver noise stripped
+
+
+def test_restock_tops_up_the_most_urgent_product(client, admin_headers):
+    """Restock exactly one product (max_products=1), so local data barely changes."""
+    low = client.get("/api/admin/inventory", headers=admin_headers,
+                     params={"low_stock_only": True, "page_size": 1}).json()["items"]
+    if not low:
+        pytest.skip("No product at or below its reorder level; nothing to restock")
+    most_urgent = low[0]                      # same order as restock: lowest stock first
+    target = most_urgent["quantity_on_hand"] + 50
+
+    response = client.post("/api/admin/restock", headers=admin_headers,
+                           json={"target_quantity": target, "max_products": 1})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["products_restocked"] == 1
+    assert body["target_quantity"] == target
+    assert body["units_added"] == target - most_urgent["quantity_on_hand"]
+    assert body["still_low"] >= 0
+
+
+def test_restock_limits_are_enforced(client, admin_headers):
+    assert client.post("/api/admin/restock", json={}).status_code == 401          # admin only
+    for bad in ({"target_quantity": 0}, {"target_quantity": 1001},
+                {"max_products": 0}, {"max_products": 2001},
+                {"target_quantity": 50, "typo_field": 1}):                       # unknown field
+        assert client.post("/api/admin/restock", headers=admin_headers, json=bad).status_code == 422, bad
+
+
+# --- Synthetic traffic tag (X-Synthetic-Source) --------------------------------------
+
+def test_cors_preflight_allows_synthetic_source(client):
+    """Browsers ask permission before sending a custom header to another origin."""
+    origin = get_settings().allowed_origin_list[0]
+    response = client.options("/api/cart", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "x-customer-id,x-synthetic-source",
+    })
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "x-synthetic-source" in response.headers["access-control-allow-headers"].lower()
+
+
+def test_synthetic_source_is_logged_and_validated(client, caplog):
+    """A valid tag appears in the request's log line; an invalid one becomes "-".
+    Either way the request is handled exactly the same."""
+    request_logger = logging.getLogger("shoplite.request")
+    request_logger.addHandler(caplog.handler)    # the API's loggers don't propagate to root
+    try:
+        tagged = client.get("/health", headers={"X-Synthetic-Source": "playwright/buyer"})
+        odd = client.get("/health", headers={"X-Synthetic-Source": "bad tag; <script>"})
+    finally:
+        request_logger.removeHandler(caplog.handler)
+
+    assert tagged.status_code == odd.status_code == 200
+    messages = [record.getMessage() for record in caplog.records if record.name == "shoplite.request"]
+    assert any("synthetic playwright/buyer)" in m for m in messages)
+    assert any(m.startswith("GET /health") and "synthetic -)" in m for m in messages)
+    assert not any("<script>" in m for m in messages)

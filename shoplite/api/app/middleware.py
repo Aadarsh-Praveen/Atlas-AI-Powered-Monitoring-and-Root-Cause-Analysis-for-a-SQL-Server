@@ -7,6 +7,12 @@ Every request gets an ID. It is:
 so one request can be traced from the browser through the logs.
 
 Every response also carries X-App-Version, the API release that handled it.
+
+Synthetic traffic (Phase 3): the Playwright shoppers and Locust send
+X-Synthetic-Source (e.g. "playwright/buyer", "locust/browse"). It's written
+into the request's log line, and nothing else: tagged and untagged requests
+are handled exactly the same. The tag only lets later analysis (and Atlas's
+evaluations) tell simulated customers from real ones.
 """
 
 import contextvars
@@ -22,6 +28,7 @@ from app.config import get_settings
 
 REQUEST_ID_HEADER = "X-Request-ID"
 VERSION_HEADER = "X-App-Version"
+SYNTHETIC_HEADER = "X-Synthetic-Source"
 
 # A context variable holds a value per request (per asyncio task), so code
 # anywhere in the request can read the current ID without passing it around,
@@ -31,6 +38,11 @@ _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", 
 # An incoming ID is reused only if it's short and plain. Anything else is
 # replaced, so callers can't inject odd characters or huge values into logs.
 SAFE_INCOMING_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+# The synthetic tag gets the same treatment, plus "/" for "tool/persona".
+# An invalid tag is ignored (logged as "-"), never rejected: rejecting it would
+# treat tagged traffic differently from real traffic.
+SAFE_SYNTHETIC_SOURCE = re.compile(r"^[A-Za-z0-9._/-]{1,64}$")
 
 logger = logging.getLogger("shoplite.request")
 
@@ -71,6 +83,9 @@ async def request_context_middleware(request: Request, call_next):
     request_id = incoming if SAFE_INCOMING_ID.match(incoming) else uuid.uuid4().hex
     token = _request_id.set(request_id)
     request.state.request_id = request_id
+    incoming_source = request.headers.get(SYNTHETIC_HEADER, "")
+    synthetic_source = incoming_source if SAFE_SYNTHETIC_SOURCE.match(incoming_source) else "-"
+    request.state.synthetic_source = synthetic_source
     started = time.perf_counter()
 
     try:
@@ -94,9 +109,10 @@ async def request_context_middleware(request: Request, call_next):
         customer = request.headers.get("X-Customer-Id") or "-"
         level = logging.ERROR if response.status_code >= 500 else logging.INFO
         # Never log X-Admin-Token or request bodies: they can hold secrets
-        # and personal data.
-        logger.log(level, "%s %s -> %d in %.0f ms (customer %s)",
-                   request.method, path, response.status_code, elapsed_ms, customer)
+        # and personal data. "synthetic -" means a real (untagged) request.
+        logger.log(level, "%s %s -> %d in %.0f ms (customer %s, synthetic %s)",
+                   request.method, path, response.status_code, elapsed_ms, customer,
+                   synthetic_source)
         return response
     finally:
         # Restore the previous value so the ID can't leak into later work.

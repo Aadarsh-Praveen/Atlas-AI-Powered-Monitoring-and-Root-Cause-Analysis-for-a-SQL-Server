@@ -53,6 +53,11 @@ yarn-error.log*
 *.log
 logs/
 
+# Traffic run output (Phase 3): shopper results, screenshots, and traces of
+# broken pages. Uploaded as workflow artifacts in GitHub Actions; never committed.
+shoppers-artifacts/
+locust-report*.html
+
 # ---------------------------------------------------------------------------
 # Bicep / Azure (from Phase 2)
 # *.local.json parameter files hold values for your own subscription

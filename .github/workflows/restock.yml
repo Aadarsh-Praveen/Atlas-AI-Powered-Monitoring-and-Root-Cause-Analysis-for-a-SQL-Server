@@ -1,0 +1,89 @@
+# .github/workflows/restock.yml: nightly "receive a shipment" so simulated
+# purchases don't slowly empty the store.
+#
+# Schedule: 22:45 UTC Mon-Fri, just before vm-schedule.yml deallocates the VM
+# at 23:00 (6:45 PM Boston in summer, 5:45 PM in winter).
+#
+# Calls POST /api/admin/restock (API 1.1.0+): every product at or below its
+# reorder level is topped up to target_quantity (default 100), lowest stock
+# first, at most max_products (default 500) in one short transaction.
+# Phase 4's vendor ETL may take this job over.
+#
+# Safeguards: kill switch (TRAFFIC_ENABLED), health check first, one run at a
+# time, a time limit. The admin token goes only into the request header; it is
+# never echoed, and GitHub masks it in logs anyway.
+
+name: Restock
+
+on:
+  schedule:
+    - cron: "45 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      target_quantity:
+        description: "Units on hand after restocking (1-1000)"
+        default: "100"
+      max_products:
+        description: "Most products restocked in this run (1-2000)"
+        default: "500"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restock
+  cancel-in-progress: false
+
+jobs:
+  restock:
+    if: vars.TRAFFIC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_URL: ${{ vars.API_URL }}
+    steps:
+      - name: Check production health
+        id: health
+        run: |
+          if curl -fsS --max-time 15 "$API_URL/health" | grep -q '"status":"ok"'; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "## Restock skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "The API at $API_URL isn't healthy (the VM may be off). Nothing was restocked." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Receive a shipment
+        if: steps.health.outputs.healthy == 'true'
+        env:
+          ADMIN_TOKEN: ${{ secrets.SHOPLITE_ADMIN_TOKEN }}
+          TARGET: ${{ inputs.target_quantity || '100' }}
+          MAX_PRODUCTS: ${{ inputs.max_products || '500' }}
+        run: |
+          body=$(jq -n --argjson t "$TARGET" --argjson m "$MAX_PRODUCTS" \
+                 '{target_quantity: $t, max_products: $m}')
+          # -w prints the status code after the body; the token is only in the header.
+          response=$(curl -sS --max-time 60 -X POST "$API_URL/api/admin/restock" \
+            -H "X-Admin-Token: $ADMIN_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "X-Synthetic-Source: workflow/restock" \
+            -d "$body" -w '\n%{http_code}')
+          status=$(echo "$response" | tail -n 1)
+          result=$(echo "$response" | sed '$d')
+
+          if [ "$status" = "401" ]; then
+            echo "::error::The API rejected SHOPLITE_ADMIN_TOKEN (401). Update the repository secret to the production ADMIN_TOKEN."
+            exit 1
+          fi
+          if [ "$status" != "200" ]; then
+            echo "::error::Restock failed with HTTP $status: $result"
+            exit 1
+          fi
+
+          echo "$result" | jq .
+          {
+            echo "## Restock"
+            echo "| Products restocked | Units added | Target quantity | Still at or below reorder level |"
+            echo "|---|---|---|---|"
+            echo "$result" | jq -r '"| \(.products_restocked) | \(.units_added) | \(.target_quantity) | \(.still_low) |"'
+          } >> "$GITHUB_STEP_SUMMARY"

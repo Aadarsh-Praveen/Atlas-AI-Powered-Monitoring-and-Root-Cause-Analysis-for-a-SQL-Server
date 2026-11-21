@@ -17,7 +17,8 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from app import flags
 from app.config import get_settings
 from app.db import QUERY_TIMEOUT_SQLSTATE, describe_sql_error, dispose_engine, is_database_unavailable
-from app.middleware import REQUEST_ID_HEADER, VERSION_HEADER, configure_logging, current_request_id, request_context_middleware
+from app.middleware import (REQUEST_ID_HEADER, SYNTHETIC_HEADER, VERSION_HEADER, configure_logging,
+                            current_request_id, request_context_middleware)
 from app.routers import account, admin, cart, catalog, checkout, health, orders
 
 # Loading settings here means a missing or invalid value stops the API at
@@ -57,7 +58,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origin_list,               # exact origins only, never "*"
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Content-Type", "X-Customer-Id", "X-Admin-Token", REQUEST_ID_HEADER],
+    # X-Synthetic-Source: the Playwright shoppers send it from the storefront,
+    # and browsers ask permission (a preflight) before sending custom headers.
+    allow_headers=["Content-Type", "X-Customer-Id", "X-Admin-Token", REQUEST_ID_HEADER,
+                   SYNTHETIC_HEADER],
     # Browsers hide custom response headers from JavaScript unless they're
     # exposed. The storefront reads these for error references and display.
     expose_headers=[REQUEST_ID_HEADER, VERSION_HEADER],
