@@ -7,9 +7,9 @@ reviews the diagnosis, applies the fix, and Atlas verifies that it worked. The m
 **ShopLite**, a small e-commerce app (Next.js storefront, FastAPI backend, SQL Server 2022) running
 under continuous simulated traffic.
 
-For the full architecture, key decisions, and roadmap, read
-[docs/00-project-overview.md](docs/00-project-overview.md). Each phase has its own file in
-[docs/](docs/), and [docs/build-log.md](docs/build-log.md) records every file added.
+For the full architecture, key decisions, and roadmap, see `docs/00-project-overview.md`. Each phase
+has its own file in `docs/`, and `docs/build-log.md` records every file added. **`docs/` is kept on
+the owner's machine only** (it's in `.gitignore`), so those files aren't on GitHub.
 
 ## Repository layout
 
@@ -18,7 +18,7 @@ For the full architecture, key decisions, and roadmap, read
 ├── CLAUDE.md               rules for Claude Code
 ├── docker-compose.yml      local SQL Server and Postgres for development
 ├── .env.example            template for the root .env (secrets stay local)
-├── docs/                   overview, phase files, build log
+├── docs/                   overview, phase files, build log (local only, not in Git)
 ├── infra/                  Bicep templates
 ├── shoplite/
 │   ├── db/                 schema and seed data
@@ -101,3 +101,32 @@ docker compose logs vendor-pg        # why Postgres failed
 ```
 
 `docker compose down -v` also deletes the volumes, which erases all local database data.
+
+## Production (Phase 2)
+
+ShopLite runs in Azure and on Vercel, the way a small company would run it:
+
+```
+Shopper's browser ──HTTPS──▶ Vercel: storefront (shoplite/web)
+        │
+        └──HTTPS──▶ <dns-label>.<region>.cloudapp.azure.com
+                      Azure VM prod-sql-01 (Windows Server 2022, B2ms, UTC)
+                      ├─ Caddy :443/:80   Let's Encrypt certificate, forwards to the API
+                      ├─ ShopLite API     Windows service, Uvicorn × 2, 127.0.0.1:8000
+                      └─ SQL Server 2022  Developer, local connections only, SalesDB (1,000,000 orders)
+```
+
+Only 443 and 80 are open to the internet, and RDP (3389) only from the owner's IP. **SQL Server
+(1433) is never reachable from outside the VM.** The VM is deallocated every evening by an
+auto-shutdown schedule.
+
+| Guide | What it covers |
+|---|---|
+| [infra/README.md](infra/README.md) | Bicep: deploy the resource group's contents, what each resource is, billing, teardown |
+| [server/vm-setup/README.md](server/vm-setup/README.md) | Preparing the VM: data disk, SQL Server settings, prerequisites, firewall, building and seeding SalesDB |
+| [shoplite/api/deploy/README.md](shoplite/api/deploy/README.md) | Installing the API and Caddy services, later deploys with `deploy.ps1`, rollback |
+| [shoplite/web/README.md](shoplite/web/README.md) | The storefront, including its Vercel setup |
+| [knowledge/runbooks/shoplite-production.md](knowledge/runbooks/shoplite-production.md) | Operating production: ports, services, logs, health, the "site is down" checklist |
+
+Production uses **new** passwords and tokens, stored only in the VM's `.env` files and the owner's
+password manager. Never run the API smoke tests against production.

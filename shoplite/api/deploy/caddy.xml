@@ -1,0 +1,66 @@
+<!--
+  shoplite/api/deploy/caddy.xml: WinSW service definition for Caddy on
+  prod-sql-01.
+
+  Install layout (see README.md in this folder):
+
+      C:\services\caddy\caddy.exe        Caddy for Windows amd64, from caddyserver.com
+      C:\services\caddy\caddy-svc.exe    WinSW-x64.exe, renamed
+      C:\services\caddy\caddy-svc.xml    a copy of THIS file, with SHOPLITE_API_HOST filled in
+      C:\services\caddy\data\            certificates and keys (created by Caddy)
+
+  The WinSW wrapper is named caddy-svc so it doesn't clash with caddy.exe in
+  the same folder.
+
+  Before installing, replace the SHOPLITE_API_HOST value below (in the COPY in
+  C:\services\caddy, not in the repo) with your DNS name, the "fqdn" output of
+  the Bicep deployment.
+-->
+<service>
+  <id>caddy</id>
+  <name>Caddy (ShopLite HTTPS)</name>
+  <description>Caddy reverse proxy: HTTPS on 443 with Let's Encrypt, HTTP 80 redirect, forwards to the ShopLite API on 127.0.0.1:8000.</description>
+
+  <executable>C:\services\caddy\caddy.exe</executable>
+  <!-- Runs the Caddyfile straight from the repo, so a deploy that changes it
+       takes effect on the next restart. -->
+  <arguments>run --config C:\atlas\shoplite\api\deploy\Caddyfile --adapter caddyfile</arguments>
+  <workingdirectory>C:\services\caddy</workingdirectory>
+
+  <!-- The site address used by the Caddyfile ({$SHOPLITE_API_HOST}).
+       REPLACE in the installed copy, e.g. shoplite-yourname.eastus2.cloudapp.azure.com -->
+  <env name="SHOPLITE_API_HOST" value="replace-me.eastus2.cloudapp.azure.com" />
+
+  <!-- Where Caddy keeps its certificates and its account with Let's Encrypt.
+       Without this, it would use the service account's profile folder, which
+       is hard to find. Keeping certificates across restarts matters: Let's
+       Encrypt limits how many new certificates one name can get per week. -->
+  <env name="XDG_DATA_HOME" value="C:\services\caddy\data" />
+  <env name="XDG_CONFIG_HOME" value="C:\services\caddy\config" />
+
+  <!-- Same low-privilege account as the API. Windows lets any account listen
+       on ports 80 and 443 (no root needed, unlike Linux). It needs write access
+       to C:\services\caddy\data, C:\services\caddy\config, and F:\Logs\caddy;
+       README.md sets these. -->
+  <serviceaccount>
+    <username>NT AUTHORITY\LocalService</username>
+  </serviceaccount>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+
+  <stoptimeout>15 sec</stoptimeout>
+
+  <!-- Caddy's console output (WinSW captures it). Caddy's own JSON logs are
+       configured in the Caddyfile and go to the same folder. -->
+  <logpath>F:\Logs\caddy</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>

@@ -593,24 +593,33 @@ def generate_order_chunks(rng, args, history_start, history_end, products, custo
 # Database
 # ===========================================================================
 
-def load_sa_password():
+def load_admin_login():
+    """The SQL admin login from the root .env: (user, password).
+
+    The user is SQL_ADMIN_USER, or "sa" if it's not set (local Docker). On
+    prod-sql-01 it's the login created by the SQL IaaS extension, since Azure
+    doesn't allow "sa" there. The password is SA_PASSWORD in both places.
+    """
     if not ENV_FILE.exists():
         sys.exit(f"[FAIL] No .env file at {ENV_FILE}. Run: cp .env.example .env")
     load_dotenv(ENV_FILE)
     password = os.getenv("SA_PASSWORD")
     if not password:
         sys.exit("[FAIL] SA_PASSWORD is missing from .env")
-    return password
+    user = (os.getenv("SQL_ADMIN_USER") or "sa").strip()
+    return user, password
 
 
-def connect(sa_password):
-    """Connect to SalesDB as sa. Transactions are committed per chunk."""
-    password = sa_password.replace("}", "}}")
+def connect(admin_user, admin_password):
+    """Connect to SalesDB as the SQL admin login. Transactions are committed per chunk."""
+    # Braces make ODBC take the values literally; a "}" inside is doubled.
+    user = admin_user.replace("}", "}}")
+    password = admin_password.replace("}", "}}")
     conn_str = (
         f"DRIVER={{{ODBC_DRIVER}}};"
         f"SERVER={HOST},{SQL_PORT};"
         "DATABASE=SalesDB;"
-        "UID=sa;"
+        f"UID={{{user}}};"
         f"PWD={{{password}}};"
         "Encrypt=yes;"
         "TrustServerCertificate=yes;"
@@ -697,7 +706,7 @@ def main():
     history_end = datetime.combine(args.end_date, datetime.min.time())
     history_start = history_end - timedelta(days=365 * args.years)
 
-    conn = connect(load_sa_password())
+    conn = connect(*load_admin_login())
     cursor = conn.cursor()
     # Sends each chunk to SQL Server as one array of parameters instead of
     # one round trip per row: the difference between seconds and hours.

@@ -1,11 +1,18 @@
 """Build SalesDB by running the numbered schema scripts in order.
 
 Runs every NNN_*.sql file in this folder (001, 002, ...) against the local
-SQL Server as sa, one GO-separated batch at a time, and stops at the first
-error.
+SQL Server as the SQL admin login, one GO-separated batch at a time, and stops
+at the first error.
+
+The admin login is SQL_ADMIN_USER from the root .env, or "sa" if it's not set:
+  - locally (Docker), the admin is sa, so SQL_ADMIN_USER can be left out;
+  - on prod-sql-01, it's the login created by the SQL IaaS extension
+    (infra/modules/sql-vm.bicep), because Azure doesn't allow "sa" there.
+Its password is SA_PASSWORD in both places.
 
 !!! 001_create_database.sql DROPS and recreates SalesDB. All data is lost.
-!!! Local development only.
+!!! Locally, run it whenever you like. On production, run it ONCE, to build
+!!! SalesDB the first time (Phase 2); never again once real orders exist.
 
 Run from the repo root, inside the virtual environment:
     python shoplite/db/apply_schema.py
@@ -58,6 +65,8 @@ def load_settings():
     missing = [name for name, value in settings.items() if not value]
     if missing:
         sys.exit(f"[FAIL] Missing values in .env: {', '.join(missing)}")
+    # Optional: defaults to sa, so local .env files without it keep working.
+    settings["SQL_ADMIN_USER"] = (os.getenv("SQL_ADMIN_USER") or "sa").strip()
     return settings
 
 
@@ -103,19 +112,21 @@ def split_batches(sql):
     return [(start, text) for start, text in batches if text.strip()]
 
 
-def connect(sa_password):
-    """Connect to master as sa with autocommit on."""
+def connect(admin_user, admin_password):
+    """Connect to master as the SQL admin login with autocommit on."""
     if ODBC_DRIVER not in pyodbc.drivers():
         sys.exit(f"[FAIL] '{ODBC_DRIVER}' is not installed. See Phase 0, Part A1.")
 
     # See tools/check_local.py for what each part means. APP names this
     # session in SQL Server's session views (sys.dm_exec_sessions.program_name).
-    password = sa_password.replace("}", "}}")
+    # Braces make ODBC take the values literally; a "}" inside is doubled.
+    user = admin_user.replace("}", "}}")
+    password = admin_password.replace("}", "}}")
     conn_str = (
         f"DRIVER={{{ODBC_DRIVER}}};"
         f"SERVER={HOST},{SQL_PORT};"
         "DATABASE=master;"
-        "UID=sa;"
+        f"UID={{{user}}};"
         f"PWD={{{password}}};"
         "Encrypt=yes;"
         "TrustServerCertificate=yes;"
@@ -150,10 +161,10 @@ def main():
     scripts = find_scripts()
     variables = {"SHOPLITE_APP_PASSWORD": settings["SHOPLITE_APP_PASSWORD"]}
 
-    print(f"Applying {len(scripts)} scripts to {HOST},{SQL_PORT} as sa.")
+    print(f"Applying {len(scripts)} scripts to {HOST},{SQL_PORT} as {settings['SQL_ADMIN_USER']}.")
     print("WARNING: 001 drops and recreates SalesDB.\n")
 
-    conn = connect(settings["SA_PASSWORD"])
+    conn = connect(settings["SQL_ADMIN_USER"], settings["SA_PASSWORD"])
     cursor = conn.cursor()
 
     for script in scripts:

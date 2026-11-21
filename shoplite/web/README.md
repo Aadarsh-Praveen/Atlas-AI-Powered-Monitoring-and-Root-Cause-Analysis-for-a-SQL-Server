@@ -15,10 +15,6 @@ Prerequisites: Node.js 20, and the ShopLite API running on <http://localhost:800
 (`shoplite/api/README.md`).
 
 ```bash
-# once, from the repo root: the storefront's photos
-mkdir -p shoplite/web/public/images
-cp docs/design-reference/ShopLite/*.webp shoplite/web/public/images/
-
 cd shoplite/web
 cp .env.example .env.local     # NEXT_PUBLIC_API_URL=http://localhost:8000
 npm install
@@ -30,6 +26,28 @@ Open <http://localhost:3000>. The API only accepts requests from the origins in 
 
 In development, React's strict mode runs effects twice, so you'll see some API calls twice in the
 browser's Network tab. Production builds call once.
+
+## Production (Vercel)
+
+The storefront is deployed to Vercel from GitHub (Phase 2, Part C5). Vercel builds and serves it; the
+API stays on the Azure VM.
+
+1. In Vercel, **import the GitHub repo** and set **Root Directory** to `shoplite/web`. Vercel detects
+   Next.js; the default build settings are right.
+2. Add the environment variable **`NEXT_PUBLIC_API_URL`** =
+   `https://<dns-label>.<region>.cloudapp.azure.com` (the Bicep `fqdn` output, https, no trailing
+   slash).
+3. **Deploy**, then copy your production domain (e.g. `shoplite-xyz.vercel.app`).
+4. On the VM, put `https://<that domain>` in `ALLOWED_ORIGINS` in `C:\atlas\shoplite\api\.env` and
+   run `Restart-Service shoplite-api` (`shoplite/api/deploy/README.md`, step 8).
+
+Two things to know:
+
+- **`NEXT_PUBLIC_API_URL` is fixed at build time.** Next.js copies `NEXT_PUBLIC_*` values into the
+  JavaScript sent to browsers when it builds. Changing the variable in Vercel does nothing until you
+  **redeploy**.
+- **Preview deployments are blocked by CORS on purpose.** Each preview gets its own URL, and the API
+  only accepts the production domain. Test previews against your local API instead.
 
 ## Pages
 
@@ -56,14 +74,13 @@ phones), aisle pills, photo cards that fade in and lift on hover or keyboard foc
 drawer for a quick view. All animation is switched off when the shopper's system asks for reduced
 motion. Fonts are the system font stack (nothing downloaded).
 
-- **One photo per item type, never reused.** Each photo in `public/images` belongs to exactly one
-  item type, checked against the image itself: Cordless Drill, Claw Hammer, Drywall Screws,
-  Interior Paint, Extension Cord, Pruning Shears, Storage Bin, Finishing Nails, Hex Bolts,
-  Lag Screws, Washers (`product-4`, an elbow fitting, matches nothing we sell). `lib/images.js`
-  finds the item type as whole words in the product name. Products of other item types show a
-  placeholder card with their item type and aisle (`components/ProductPhoto.js`), so no card is
-  blank. Photos show the item type, not the exact brand or size, so they're decorative (`alt=""`)
-  and the product page says "Photo shows a typical …".
+- **One photo per item type, never reused.** Every one of the 65 item types has its own photo:
+  `public/images/product-*.webp` for the first eleven and `public/images/items/` for the rest, each
+  checked against the image itself. `lib/images.js` finds the item type as whole words in the
+  product name (longest match wins, so "Circular Saw" isn't mistaken for "Hand Saw"). If a new item
+  type ever lacks a photo, `components/ProductPhoto.js` shows a placeholder card with the item type
+  and aisle, so no card is blank. Photos show the item type, not the exact brand or size, so they're
+  decorative (`alt=""`) and the product page says "Photo shows a typical …".
 - **The Cart control** in the header is a link to `/cart`. A plain click opens the quick-view drawer
   (native `<dialog>`: focus trapped inside, Esc or a backdrop click closes it, focus returns to the
   Cart control). Cmd/Ctrl/Shift/middle-click still opens `/cart`. The drawer links to `/cart` and
@@ -89,7 +106,7 @@ design can change without breaking them. Repeated elements carry an extra `data-
 
 | Area | `data-testid` |
 |---|---|
-| Header | `header-search-input`, `header-search-submit`, `nav-cart-link` (plain click opens the cart drawer; its `href` is `/cart`), `cart-count`, `nav-signin-link`, `nav-account-link`, `signout-button`, `nav-admin-link` |
+| Header | `header-search-input`, `header-search-submit`, `nav-cart-link` (plain click opens the cart drawer; its `href` is `/cart`), `cart-count`, `nav-signin-link`, `nav-account-link` ("Orders"), `nav-admin-link`, `profile-button` (round initial; opens the menu), `signout-button` (inside the profile menu: click `profile-button` first) |
 | Catalog | `hero-cta-fasteners`, `hero-cta-power-tools`, `aisle-link` [`data-slug`], `sort-select`, `results-count`, `product-tile` [`data-product-id`], `product-tile-link`, `tile-add-to-cart`, `tile-signin-link`, `empty-state` |
 | Cart drawer | `cart-drawer`, `cart-drawer-close`, `cart-drawer-item` [`data-product-id`], `cart-drawer-decrease`, `cart-drawer-increase`, `cart-drawer-remove`, `cart-drawer-subtotal`, `cart-drawer-estimated-total`, `cart-drawer-empty`, `cart-drawer-view-cart`, `cart-drawer-checkout` |
 | Toast | `toast` |
@@ -98,8 +115,8 @@ design can change without breaking them. Repeated elements carry an extra `data-
 | Product | `product-name`, `quantity-input`, `add-to-cart`, `add-to-cart-message`, `bought-together` |
 | Sign-in | `signin-email-input`, `signin-submit`, `signin-demo-button` |
 | Cart | `cart-item` [`data-product-id`], `cart-item-quantity`, `cart-item-remove`, `cart-subtotal`, `cart-shipping`, `cart-estimated-total`, `cart-empty`, `checkout-button` |
-| Checkout | `shipping-name-input`, `shipping-address-input`, `shipping-city-input`, `shipping-state-input`, `shipping-postal-input`, `payment-method-select`, `checkout-shipping`, `checkout-estimated-total`, `place-order-button`, `order-result` [`data-status`], `order-result-message` |
-| Account | `order-row` [`data-order-id`], `order-link`, `orders-empty`, `order-status`, `order-total`, `reorder-button`, `reorder-result` |
+| Checkout | `shipping-name-input`, `shipping-address-input`, `shipping-city-input`, `shipping-state-input`, `shipping-postal-input`, `payment-method-select`, `use-demo-card`, `card-number-input`, `card-expiry-input`, `card-cvc-input`, `card-name-input` (card fields are required when paying by card; click `use-demo-card` to fill them), `checkout-shipping`, `checkout-estimated-total`, `place-order-button`, `order-result` [`data-status`], `order-result-message` |
+| Account | `orders-filter` [`data-filter`], `order-row` [`data-order-id`], `order-link`, `orders-empty`, `order-status`, `order-total`, `reorder-button`, `reorder-result` |
 | Admin | `admin-token-input`, `admin-signin-submit`, `admin-signout`, `low-stock-toggle`, `inventory-row` [`data-product-id`], `report-start-date`, `report-end-date`, `report-group-by`, `report-run`, `report-row`, `top-n-input`, `top-products-row` |
 | Notices | `notice-error`, `notice-info`, `notice-success`, `loading` |
 
@@ -110,11 +127,12 @@ shoplite/web/
 ├── .env.example        NEXT_PUBLIC_API_URL template (copy to .env.local)
 ├── package.json
 ├── next.config.mjs
-├── public/images/      hero and aisle photos (copied from docs/design-reference)
+├── public/images/      hero, product-*.webp, signin.png, and items/ (one photo per item type)
 ├── lib/
 │   ├── api.js          every API call, errors, signed-in customer, admin token
 │   ├── format.js       money and time display (string-only money formatting)
-│   └── images.js       which aisle photo a product gets (by SKU prefix)
-├── components/         Header, CartDrawer, Toast, ShelfTag, ProductTile, Pagination, Notice
-└── app/                pages (App Router), globals.css (design tokens), layout.js
+│   └── images.js       which photo a product gets (by item type in its name)
+├── components/         Header, CartDrawer, Toast, ShelfTag, ProductTile, ProductPhoto,
+│                       StreamHero, SlimFrame, Pagination, Notice
+└── app/                pages (App Router), globals.css (design tokens), layout.js, icon.svg
 ```

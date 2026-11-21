@@ -11,6 +11,8 @@
 .env
 .env.*
 !.env.example
+# Other committed templates, e.g. shoplite/api/deploy/.env.production.example
+!.env.*.example
 
 # ---------------------------------------------------------------------------
 # Python (ShopLite API, Atlas API, MCP servers, tools, traffic)

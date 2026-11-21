@@ -1,0 +1,81 @@
+<!--
+  shoplite/api/deploy/shoplite-api.xml: WinSW service definition for the
+  ShopLite API on prod-sql-01.
+
+  WinSW (https://github.com/winsw/winsw, v2.12) is a small .exe that runs any
+  program as a Windows service. Install layout (see README.md in this folder):
+
+      C:\services\shoplite-api\shoplite-api.exe   WinSW-x64.exe, renamed
+      C:\services\shoplite-api\shoplite-api.xml   a copy of THIS file
+
+  WinSW finds its settings by looking for the .xml with the same name as the
+  .exe. After editing this file, copy it again and reinstall the service
+  (README.md, "Changing the service definition").
+
+  What it runs: Uvicorn, from the API's own virtual environment, with
+    - 2 worker processes (each with its own connection pool, so up to
+      2 x (DB_POOL_SIZE 10 + DB_POOL_MAX_OVERFLOW 5) = 30 SQL connections;
+      remember this when counting sessions in sys.dm_exec_sessions)
+    - host 127.0.0.1 only: nothing outside the VM can reach port 8000 directly;
+      only Caddy (same machine) talks to it
+    - no reload: production doesn't watch files for changes; deploy.ps1
+      restarts the service instead
+-->
+<service>
+  <id>shoplite-api</id>
+  <name>ShopLite API</name>
+  <description>ShopLite FastAPI backend (Uvicorn, 2 workers, 127.0.0.1:8000). Behind Caddy. Phase 2.</description>
+
+  <!-- The venv's python.exe, so the service uses exactly the packages that
+       deploy.ps1 installed from requirements.txt. -->
+  <executable>C:\atlas\shoplite\api\.venv\Scripts\python.exe</executable>
+  <!-- proxy-headers + forwarded-allow-ips: trust X-Forwarded-For/-Proto only
+       from Caddy on this machine, so request logs show the shopper's real IP
+       and https as the scheme. timeout-graceful-shutdown: let in-flight
+       requests finish (up to 10 s) when the service stops. -->
+  <arguments>-m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --proxy-headers --forwarded-allow-ips 127.0.0.1 --timeout-graceful-shutdown 10</arguments>
+  <!-- Uvicorn imports app.main from the current folder, so it must be
+       shoplite\api. (app/config.py finds shoplite\api\.env from its own
+       location, whatever the current folder is.) -->
+  <workingdirectory>C:\atlas\shoplite\api</workingdirectory>
+
+  <!-- Python writes log lines immediately instead of buffering them, so the
+       log files are current when you (or Atlas) read them. -->
+  <env name="PYTHONUNBUFFERED" value="1" />
+
+  <!-- Low-privilege built-in account: no password to manage, no admin rights.
+       It needs read access to C:\atlas (granted to all users by default),
+       read access to shoplite\api\.env, and write access to F:\Logs\shoplite-api;
+       README.md sets the last two. -->
+  <serviceaccount>
+    <username>NT AUTHORITY\LocalService</username>
+  </serviceaccount>
+
+  <!-- Start with Windows, a little after the other services, and only once
+       SQL Server's service is running. -->
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <depend>MSSQLSERVER</depend>
+
+  <!-- Restart on crash: after 10 s, then 30 s, then every 60 s. The failure
+       count resets after an hour without a crash. -->
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- On stop, wait up to 15 s (longer than Uvicorn's 10 s graceful shutdown)
+       before force-killing the process tree (the main process and both
+       workers). -->
+  <stoptimeout>15 sec</stoptimeout>
+
+  <!-- Uvicorn's output (our request log lines and errors) goes to
+       shoplite-api.out.log and shoplite-api.err.log in this folder. Each file
+       rolls over at 10 MB and the last 10 are kept, so logs can never fill the
+       data disk (at most about 200 MB). -->
+  <logpath>F:\Logs\shoplite-api</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>10</keepFiles>
+  </log>
+</service>

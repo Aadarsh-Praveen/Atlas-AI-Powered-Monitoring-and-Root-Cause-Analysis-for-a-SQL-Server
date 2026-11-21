@@ -1,0 +1,64 @@
+# shoplite/api/deploy/Caddyfile: Caddy, the HTTPS front door of prod-sql-01.
+#
+# Caddy is a web server that turns on HTTPS by itself. For the site address
+# below it:
+#   - gets a free certificate from Let's Encrypt for your DNS name, and renews
+#     it before it expires (certificates last 90 days), with no cron job;
+#   - listens on 443 (HTTPS) and 80 (HTTP). Port 80 answers Let's Encrypt's
+#     challenge and redirects every other request to HTTPS;
+#   - forwards each request to the ShopLite API on 127.0.0.1:8000, which is
+#     never exposed directly.
+#
+# The site address comes from the SHOPLITE_API_HOST environment variable,
+# set in the service definition (caddy.xml), e.g.
+#   shoplite-yourname.eastus2.cloudapp.azure.com
+# so this file holds no personal names and needs no edits per machine.
+#
+# After changing this file: deploy.ps1 restarts Caddy, or run
+#   Restart-Service caddy
+# Check it first with:
+#   C:\services\caddy\caddy.exe validate --config C:\atlas\shoplite\api\deploy\Caddyfile --adapter caddyfile
+
+# --- Global options -----------------------------------------------------------
+{
+	# The admin API stays on its default, localhost:2019: reachable only from
+	# the VM, for commands like "caddy reload". (Not opened in any firewall.)
+
+	# Caddy's own log (startup, certificate events) as JSON.
+	log {
+		output file F:/Logs/caddy/caddy.log {
+			roll_size 10MiB
+			roll_keep 10
+		}
+		format json
+	}
+}
+
+# --- The API site ---------------------------------------------------------------
+{$SHOPLITE_API_HOST} {
+	# Compress JSON responses for the browser (smaller, faster over the internet).
+	encode zstd gzip
+
+	# Forward everything to the API. Caddy adds X-Forwarded-For and
+	# X-Forwarded-Proto, which Uvicorn trusts from 127.0.0.1 (shoplite-api.xml).
+	reverse_proxy 127.0.0.1:8000 {
+		# Don't wait forever for a hung API: Caddy answers 502 instead.
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 60s
+		}
+	}
+
+	# Don't advertise the server software.
+	header -Server
+
+	# One JSON line per request: time, method, path, status, duration, client
+	# IP. Rotated at 10 MB, last 10 kept. Phase 5 ships these to Log Analytics.
+	log {
+		output file F:/Logs/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 10
+		}
+		format json
+	}
+}

@@ -65,3 +65,9 @@ The project owner is building this to **learn**. The division of work is strict:
 ### Record keeping
 17. After each file is accepted, add one line to `docs/build-log.md`:
     `- <date> | <phase> | <file path> | <one-line purpose>`
+
+### Secret files
+18. **Never read, print, or search inside any real `.env` or `.env.local` file** (or any other
+    `.env.*` file except `.env.example`), with any tool: no Read, no `cat`/`head`/`grep`/`sed`, no
+    scripts that load or echo them. Only `.env.example` templates may be read. If you need to know
+    whether a value exists or is set, **ask the owner** instead of checking.
