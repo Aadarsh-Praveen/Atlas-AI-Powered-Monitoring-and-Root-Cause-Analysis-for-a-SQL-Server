@@ -17,11 +17,12 @@
       4. Sets APP_VERSION in shoplite\api\.env to -Version. The version shows
          in the X-App-Version header, in /health, and in SQL Server's session
          tag (ShopLite-API/<version>), so Atlas can tell releases apart.
-      5. Restarts the shoplite-api service. If the Caddyfile changed in this
-         pull, validates it and restarts Caddy too.
-      6. Polls http://127.0.0.1:8000/health until it returns status "ok" with
-         the NEW version, or gives up after -HealthTimeoutSeconds and prints
-         the end of the error log.
+      5. If the Caddyfile changed in this pull, validates it and restarts Caddy.
+      6. Restarts the API through restart-api.ps1: stop the service, kill any
+         old API process that survived and make sure port 8000 is free
+         (reporting what it found), start it, and poll /health until it
+         returns status "ok" with the NEW version (or give up after
+         -HealthTimeoutSeconds and print the end of the error log).
 
     Exit code 0 on success, 1 on failure.
 
@@ -71,8 +72,6 @@ $caddyfile     = Join-Path $apiDir 'deploy\Caddyfile'
 $caddyExe      = 'C:\services\caddy\caddy.exe'
 $apiService    = 'shoplite-api'
 $caddyService  = 'caddy'
-$healthUrl     = 'http://127.0.0.1:8000/health'
-$errorLog      = 'F:\Logs\shoplite-api\shoplite-api.err.log'
 
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Ok([string]$Message)   { Write-Host "[OK]   $Message" -ForegroundColor Green }
@@ -187,38 +186,15 @@ if ($changedFiles -contains 'shoplite/api/deploy/Caddyfile') {
     Restart-Service -Name $caddyService
     Write-Ok "Caddyfile changed: Caddy restarted."
 }
-Restart-Service -Name $apiService
-Write-Ok "$apiService restarted."
-
-# -----------------------------------------------------------------------------
-# 6. Health
-# -----------------------------------------------------------------------------
-Write-Step "Health"
-$deadline = (Get-Date).AddSeconds($HealthTimeoutSeconds)
-$last = 'no response yet'
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Seconds 2
-    try {
-        $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 5
-        $body = $response.Content | ConvertFrom-Json
-        if ($body.status -eq 'ok' -and $body.version -eq $Version) {
-            Write-Ok "Healthy: status ok, database $($body.database), version $($body.version) (header X-App-Version: $($response.Headers['X-App-Version']))."
-            Write-Host "`nDeployed ShopLite API $Version (commit $commit)." -ForegroundColor Green
-            Write-Host "Check from your Mac: https://shoplite-aadarsh.northcentralus.cloudapp.azure.com/health"
-            exit 0
-        }
-        $last = "status $($body.status), version $($body.version)"
-    }
-    catch {
-        # 503 (database unreachable) and connection refused (still starting)
-        # both land here; keep waiting until the deadline.
-        $last = $_.Exception.Message
-    }
+# The API restart goes through restart-api.ps1: it stops the service, kills
+# any API process that survived the stop and frees port 8000 (reporting what
+# it did), starts the service, and waits for /health with the new version.
+$restartScript = Join-Path $PSScriptRoot 'restart-api.ps1'
+& $restartScript -ExpectedVersion $Version -HealthTimeoutSeconds $HealthTimeoutSeconds
+if ($LASTEXITCODE -ne 0) {
+    Stop-Deploy "The API didn't come back healthy on version $Version (details above). See README.md, 'Rolling back'."
 }
 
-Write-Host "`nLast health result: $last" -ForegroundColor Yellow
-if (Test-Path -LiteralPath $errorLog) {
-    Write-Host "`nLast 30 lines of ${errorLog}:" -ForegroundColor Yellow
-    Get-Content -LiteralPath $errorLog -Tail 30
-}
-Stop-Deploy "The API didn't report healthy version $Version within $HealthTimeoutSeconds seconds. See README.md, 'Rolling back'."
+Write-Host "`nDeployed ShopLite API $Version (commit $commit)." -ForegroundColor Green
+Write-Host "Check from your Mac: https://shoplite-aadarsh.northcentralus.cloudapp.azure.com/health"
+exit 0

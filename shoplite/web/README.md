@@ -32,22 +32,31 @@ browser's Network tab. Production builds call once.
 The storefront is deployed to Vercel from GitHub (Phase 2, Part C5). Vercel builds and serves it; the
 API stays on the Azure VM.
 
+| Production fact | Value |
+|---|---|
+| Storefront URL | **https://shoplite-aadarsh.vercel.app** (the production domain; Vercel's longer deployment domain redirects to it) |
+| `NEXT_PUBLIC_API_URL` | `https://shoplite-aadarsh.northcentralus.cloudapp.azure.com`, set in Vercel as a **Config** variable, not a secret. It's public on purpose: Next.js copies it into the JavaScript every browser downloads. |
+| API's `ALLOWED_ORIGINS` | `https://shoplite-aadarsh.vercel.app` only |
+
 1. In Vercel, **import the GitHub repo** and set **Root Directory** to `shoplite/web`. Vercel detects
    Next.js; the default build settings are right.
 2. Add the environment variable **`NEXT_PUBLIC_API_URL`** =
    `https://shoplite-aadarsh.northcentralus.cloudapp.azure.com` (the Bicep `fqdn` output, https, no
    trailing slash).
-3. **Deploy**, then copy your production domain (e.g. `shoplite-xyz.vercel.app`).
-4. On the VM, put `https://<that domain>` in `ALLOWED_ORIGINS` in `C:\atlas\shoplite\api\.env` and
-   run `Restart-Service shoplite-api` (`shoplite/api/deploy/README.md`, step 8).
+3. **Deploy**, then note the production domain: `shoplite-aadarsh.vercel.app`.
+4. On the VM, make sure `ALLOWED_ORIGINS` in `C:\atlas\shoplite\api\.env` is exactly `https://shoplite-aadarsh.vercel.app`,
+   then run `C:\atlas\shoplite\api\deploy\restart-api.ps1` (`shoplite/api/deploy/README.md`,
+   "Changing a setting in `.env`").
 
 Two things to know:
 
 - **`NEXT_PUBLIC_API_URL` is fixed at build time.** Next.js copies `NEXT_PUBLIC_*` values into the
   JavaScript sent to browsers when it builds. Changing the variable in Vercel does nothing until you
   **redeploy**.
-- **Preview deployments are blocked by CORS on purpose.** Each preview gets its own URL, and the API
-  only accepts the production domain. Test previews against your local API instead.
+- **Preview deployments are blocked by CORS on purpose.** Each preview and branch deployment gets its
+  own URL (with `-git-` in it), and the API only accepts the production domain. Test previews against
+  your local API instead. For CORS troubleshooting, see section 9 of
+  `knowledge/runbooks/shoplite-production.md`.
 
 ## Pages
 

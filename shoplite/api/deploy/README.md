@@ -6,7 +6,7 @@ Running the ShopLite API in production on `prod-sql-01`: two Windows services be
 Internet ──443/80──▶ Caddy (service "caddy")
                        │  Let's Encrypt certificate, HTTP→HTTPS redirect
                        ▼
-                     127.0.0.1:8000 ── ShopLite API (service "shoplite-api", Uvicorn × 2 workers)
+                     127.0.0.1:8000 ── ShopLite API (service "shoplite-api", one Uvicorn process)
                                          │
                                          ▼
                                        SQL Server (localhost:1433, SalesDB, shoplite_app)
@@ -15,14 +15,32 @@ Internet ──443/80──▶ Caddy (service "caddy")
 > **Never run the API smoke tests (`shoplite/api/tests`) against production.** They create orders and
 > buy up scarce stock. Tests stay on your Mac.
 
+## Production at a glance
+
+| What | Value |
+|---|---|
+| Storefront (Vercel) | https://shoplite-aadarsh.vercel.app |
+| API (this VM, through Caddy) | https://shoplite-aadarsh.northcentralus.cloudapp.azure.com |
+| `ALLOWED_ORIGINS` in the API's `.env` | `https://shoplite-aadarsh.vercel.app`, the production domain only |
+| `NEXT_PUBLIC_API_URL` in Vercel | The API URL above, added as a **Config** variable (not secret). It's public on purpose: Next.js puts it into the JavaScript every browser downloads. |
+
+## Pull before copying any service file
+
+**Always run `git -C C:\atlas pull --ff-only` on the VM before copying `shoplite-api.xml` or
+`caddy.xml` into `C:\services`.** The copies in `C:\services` are what the services actually use,
+and they're only as current as the clone they came from. This happened in production: the VM's clone
+predated the commit that put the real host name into `caddy.xml`, so the installed `caddy-svc.xml`
+still had the placeholder host, and Caddy asked Let's Encrypt for the wrong name.
+
 ## Files
 
 | File | What it is |
 |---|---|
-| `shoplite-api.xml` | WinSW service definition for the API: Uvicorn, 2 workers, 127.0.0.1:8000, LocalService account, restart on crash, rotating logs |
+| `shoplite-api.xml` | WinSW service definition for the API: one Uvicorn process on 127.0.0.1:8000, LocalService account, restart on crash, rotating logs |
 | `Caddyfile` | Caddy configuration: HTTPS for your DNS name, redirect, reverse proxy to the API, JSON logs |
 | `caddy.xml` | WinSW service definition for Caddy |
-| `deploy.ps1` | Every later release: pull, install, set the version, restart, check `/health` |
+| `deploy.ps1` | Every later release: pull, install, set the version, restart (through `restart-api.ps1`), check `/health` |
+| `restart-api.ps1` | Clean API restart: stop, kill any leftover API process, confirm port 8000 is free, start, check `/health`. Use it after every `.env` change. |
 | `.env.production.example` | Template for the API's production `.env` |
 
 ## Where things live on the VM
@@ -53,9 +71,15 @@ Copy-Item C:\atlas\shoplite\api\deploy\.env.production.example C:\atlas\shoplite
 notepad C:\atlas\shoplite\api\.env
 ```
 
-- `DB_PASSWORD`: the `SHOPLITE_APP_PASSWORD` from the VM's root `.env`.
+Only the three settings under **"1. EDIT THESE"** at the top need changing:
+
+- `DB_PASSWORD`: **must be identical** to `SHOPLITE_APP_PASSWORD` in the VM's root `.env`
+  (`C:\atlas\.env`), because `apply_schema.py` created the `shoplite_app` login with that value. Copy
+  and paste it rather than retyping it. A mismatch makes every request fail with
+  `Login failed for user 'shoplite_app'. (18456)` and `/health` returns 503.
 - `ADMIN_TOKEN`: a new token, generated in step 3 below (come back and fill it in).
-- `ALLOWED_ORIGINS`: leave the placeholder until Vercel exists (Part C5).
+- `ALLOWED_ORIGINS`: already production's value, `https://shoplite-aadarsh.vercel.app`. Edit that
+  line itself; there's no commented example to confuse it with.
 
 Restrict the file to Administrators, SYSTEM, and the service account (read-only):
 
@@ -102,6 +126,7 @@ Download **WinSW-x64.exe** from the v2.12.0 release:
 https://github.com/winsw/winsw/releases/tag/v2.12.0
 
 ```powershell
+git -C C:\atlas pull --ff-only                   # the service file must be current (see above)
 New-Item -ItemType Directory -Force C:\services\shoplite-api | Out-Null
 Copy-Item $HOME\Downloads\WinSW-x64.exe C:\services\shoplite-api\shoplite-api.exe
 Copy-Item C:\atlas\shoplite\api\deploy\shoplite-api.xml C:\services\shoplite-api\shoplite-api.xml
@@ -120,6 +145,7 @@ Download Caddy for **Windows amd64** from https://caddyserver.com/download (stan
 enough) and save it as `C:\services\caddy\caddy.exe`.
 
 ```powershell
+git -C C:\atlas pull --ff-only                   # caddy.xml must name the real host (see above)
 New-Item -ItemType Directory -Force C:\services\caddy\data, C:\services\caddy\config | Out-Null
 icacls C:\services\caddy\data   /grant "NT AUTHORITY\LocalService:(OI)(CI)M"
 icacls C:\services\caddy\config /grant "NT AUTHORITY\LocalService:(OI)(CI)M"
@@ -165,11 +191,30 @@ start).
 
 ### 8. After Vercel exists (Part C5)
 
-Put your Vercel production domain in `ALLOWED_ORIGINS` in `C:\atlas\shoplite\api\.env`, then:
+Check that `ALLOWED_ORIGINS` in `C:\atlas\shoplite\api\.env` is exactly
+`https://shoplite-aadarsh.vercel.app`, then restart cleanly:
 
 ```powershell
-Restart-Service shoplite-api
+C:\atlas\shoplite\api\deploy\restart-api.ps1
 ```
+
+---
+
+## Changing a setting in `.env`
+
+Edit `C:\atlas\shoplite\api\.env`, then restart with **`restart-api.ps1`, not `Restart-Service`**:
+
+```powershell
+notepad C:\atlas\shoplite\api\.env
+C:\atlas\shoplite\api\deploy\restart-api.ps1
+```
+
+The script stops the service, then looks for API processes that survived the stop: any `python.exe`
+running as LOCAL SERVICE, and whatever is listening on port 8000. It kills them (listing each one
+with its start time), confirms the port is free, starts the service, and waits for `/health`. In
+production, an old process once kept serving the previous `ALLOWED_ORIGINS` after a plain
+`Restart-Service`. If a change still doesn't seem to apply, see "Config change didn't take effect" in
+the runbook (`knowledge/runbooks/shoplite-production.md`).
 
 ---
 
@@ -183,8 +228,9 @@ C:\atlas\shoplite\api\deploy\deploy.ps1 -Version 1.0.1
 ```
 
 It pulls (and refuses if the VM's copy has local changes), installs requirements, sets `APP_VERSION`,
-restarts the API (and Caddy if the Caddyfile changed), and waits until `/health` reports the new
-version. A failure prints the end of the error log and exits with code 1.
+restarts Caddy if the Caddyfile changed, then restarts the API through `restart-api.ps1` (so leftover
+processes are cleared and reported) and waits until `/health` reports the new version. A failure
+prints the end of the error log and exits with code 1.
 
 Version numbers: bump the last number for fixes (1.0.1), the middle one for features (1.1.0). The
 version shows in `/health`, the `X-App-Version` header, and SQL Server's sessions
@@ -206,18 +252,19 @@ Afterwards, fix the problem on your Mac, push, and return the VM to `main`
 ### Changing a service definition
 
 `deploy.ps1` doesn't reapply `shoplite-api.xml` or `caddy.xml` (it warns when one changed). To apply
-one:
+one, **pull first**, then reinstall:
 
 ```powershell
+git -C C:\atlas pull --ff-only
 Stop-Service shoplite-api
 C:\services\shoplite-api\shoplite-api.exe uninstall
 Copy-Item C:\atlas\shoplite\api\deploy\shoplite-api.xml C:\services\shoplite-api\shoplite-api.xml
 C:\services\shoplite-api\shoplite-api.exe install
-Start-Service shoplite-api
+C:\atlas\shoplite\api\deploy\restart-api.ps1   # clears leftovers, starts, checks /health
 ```
 
-For Caddy it's the same with `caddy-svc.exe` and `caddy-svc.xml`; set `SHOPLITE_API_HOST` again in
-the new copy (it already names production's host).
+For Caddy it's the same with `caddy-svc.exe` and `caddy-svc.xml`, ending with `Start-Service caddy`.
+Check that the new copy's `SHOPLITE_API_HOST` is `shoplite-aadarsh.northcentralus.cloudapp.azure.com`.
 
 ## Logs
 

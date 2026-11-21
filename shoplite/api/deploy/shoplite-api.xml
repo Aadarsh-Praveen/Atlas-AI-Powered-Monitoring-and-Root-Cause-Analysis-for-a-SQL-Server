@@ -13,18 +13,30 @@
   (README.md, "Changing the service definition").
 
   What it runs: Uvicorn, from the API's own virtual environment, with
-    - 2 worker processes (each with its own connection pool, so up to
-      2 x (DB_POOL_SIZE 10 + DB_POOL_MAX_OVERFLOW 5) = 30 SQL connections;
-      remember this when counting sessions in sys.dm_exec_sessions)
+    - ONE process (no --workers): one connection pool, so up to
+      DB_POOL_SIZE 10 + DB_POOL_MAX_OVERFLOW 5 = 15 SQL connections;
+      remember this when counting sessions in sys.dm_exec_sessions
     - host 127.0.0.1 only: nothing outside the VM can reach port 8000 directly;
       only Caddy (same machine) talks to it
-    - no reload: production doesn't watch files for changes; deploy.ps1
-      restarts the service instead
+    - no reload: production doesn't watch files for changes; restart-api.ps1
+      (and deploy.ps1, which uses it) restarts the service instead
+
+  Why one worker (Phase 2 originally said two): with --workers 2 on Windows,
+  Uvicorn's supervisor starts the workers through multiprocessing "spawn",
+  and every worker holds the listening socket on port 8000. WinSW stops a
+  service by killing the process it started and that process's children. In
+  production, workers outlived the stop: once their parent (or the venv
+  launcher in front of it) was gone, nothing linked them to the service, so
+  they kept answering on port 8000 with their OLD settings after a "restart".
+  A single process has no orphans to leave behind. On this 2-vCPU burstable
+  VM a second worker added little capacity anyway: the API mostly waits on
+  SQL Server, and FastAPI already runs those waits on a thread pool.
+  restart-api.ps1 still checks for leftovers, as a safety net.
 -->
 <service>
   <id>shoplite-api</id>
   <name>ShopLite API</name>
-  <description>ShopLite FastAPI backend (Uvicorn, 2 workers, 127.0.0.1:8000). Behind Caddy. Phase 2.</description>
+  <description>ShopLite FastAPI backend (Uvicorn, single process, 127.0.0.1:8000). Behind Caddy. Restart with restart-api.ps1.</description>
 
   <!-- The venv's python.exe, so the service uses exactly the packages that
        deploy.ps1 installed from requirements.txt. -->
@@ -33,7 +45,7 @@
        from Caddy on this machine, so request logs show the shopper's real IP
        and https as the scheme. timeout-graceful-shutdown: let in-flight
        requests finish (up to 10 s) when the service stops. -->
-  <arguments>-m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --proxy-headers --forwarded-allow-ips 127.0.0.1 --timeout-graceful-shutdown 10</arguments>
+  <arguments>-m uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1 --timeout-graceful-shutdown 10</arguments>
   <!-- Uvicorn imports app.main from the current folder, so it must be
        shoplite\api. (app/config.py finds shoplite\api\.env from its own
        location, whatever the current folder is.) -->
@@ -65,8 +77,8 @@
   <resetfailure>1 hour</resetfailure>
 
   <!-- On stop, wait up to 15 s (longer than Uvicorn's 10 s graceful shutdown)
-       before force-killing the process tree (the main process and both
-       workers). -->
+       before force-killing the process tree: the venv launcher and the Python
+       process it starts. restart-api.ps1 then confirms nothing is left. -->
   <stoptimeout>15 sec</stoptimeout>
 
   <!-- Uvicorn's output (our request log lines and errors) goes to

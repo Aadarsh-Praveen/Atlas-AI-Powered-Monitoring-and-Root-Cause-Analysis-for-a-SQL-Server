@@ -107,12 +107,12 @@ docker compose logs vendor-pg        # why Postgres failed
 ShopLite runs in Azure and on Vercel, the way a small company would run it:
 
 ```
-Shopper's browser ──HTTPS──▶ Vercel: storefront (shoplite/web)
+Shopper's browser ──HTTPS──▶ Vercel: storefront (shoplite/web), https://shoplite-aadarsh.vercel.app
         │
         └──HTTPS──▶ shoplite-aadarsh.northcentralus.cloudapp.azure.com
                       Azure VM prod-sql-01 (Windows Server 2022, B2as_v2, UTC, North Central US)
                       ├─ Caddy :443/:80   Let's Encrypt certificate, forwards to the API
-                      ├─ ShopLite API     Windows service, Uvicorn × 2, 127.0.0.1:8000
+                      ├─ ShopLite API     Windows service, one Uvicorn process, 127.0.0.1:8000
                       └─ SQL Server 2022  Developer, local connections only, SalesDB (1,000,000 orders)
 ```
 
