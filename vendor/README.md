@@ -19,8 +19,7 @@ limited to the shared tables. The vendor admin connection never leaves your Mac.
 | `sql/001_schema.sql` | Schema, triggers, and the two roles. Safe to re-run; re-running also resets the role passwords. |
 | `seed.py` | Suppliers and a catalog that maps to ShopLite's 5,000 products (as the admin) |
 | `activity.py` | One "vendor day" of changes (as `vendor_activity`) |
-| `pg_url.py` | Builds a Postgres URL from separate settings with the user and password percent-encoded, so `@`, `#`, `%` in a password work |
-| `tests/test_pg_url.py` | Tests for it, no database needed: `python -m pytest vendor/tests -v` |
+| `tests/test_pg_url.py` | Tests for the URLs the scripts build (user and password percent-encoded by `tools/envconfig.py`, so `@`, `#`, `%` in a password work), no database needed: `python -m pytest vendor/tests -v` |
 | `requirements.txt` | `psycopg` 3, plus ShopLite's database packages (the seed uses ShopLite's product generator) |
 | `../knowledge/contracts/vendor-supplier-feed.yml` | The data contract: exactly what ShopLite depends on |
 | `../.github/workflows/vendor-day.yml` | Runs `activity.py` every day at 12:00 UTC |

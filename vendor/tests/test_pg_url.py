@@ -1,4 +1,5 @@
-"""Tests for building Postgres URLs from separate settings (vendor/pg_url.py).
+"""Tests for building Postgres URLs from separate settings: postgres_url in
+tools/envconfig.py, and the vendor scripts that use it (seed.py, activity.py).
 
 No database needed. Run from the repo root, in the root virtual environment:
 
@@ -20,10 +21,11 @@ from psycopg.conninfo import conninfo_to_dict
 
 VENDOR_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(VENDOR_DIR))          # so the tests import vendor/*.py like the scripts do
+sys.path.insert(0, str(VENDOR_DIR.parent / "tools"))
 
 import activity  # noqa: E402
 import seed  # noqa: E402
-from pg_url import postgres_url  # noqa: E402
+from envconfig import postgres_url  # noqa: E402
 
 # Every character with a job in a URL, plus a space.
 TRICKY_PASSWORD = "p@ss#word%25/:?&= x"

@@ -106,7 +106,14 @@ def setting(*names: str, default: str | None = None, environ=None) -> str | None
 def postgres_url(user: str, password: str, host: str, port, dbname: str, **options) -> str:
     """postgresql://user:password@host:port/dbname[?options], user, password, and
     database percent-encoded: "@" -> %40, "#" -> %23, "%" -> %25, "/" -> %2F, ...
-    (safe="" so even "/" is encoded). Postgres decodes them back."""
+    (safe="" so even "/" is encoded). Postgres decodes them back.
+
+    Why: in a URL "@" ends the user:password part, ":" separates user from
+    password, "/" starts the database, "?" the options, "#" a fragment, "%" an
+    escape. Pasted in as is, the password "abc@123" turns
+    postgresql://vendor:abc@123@localhost:5433/vendordb into host
+    "123@localhost" ("failed to resolve host"). Encoded, the server receives
+    exactly the password you set."""
     def encode(value) -> str:
         return quote(str(value), safe="")
     url = f"postgresql://{encode(user)}:{encode(password)}@{host}:{port}/{encode(dbname)}"
