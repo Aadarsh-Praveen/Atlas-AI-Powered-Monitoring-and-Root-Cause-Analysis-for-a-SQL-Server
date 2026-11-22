@@ -147,12 +147,19 @@ BEGIN
     END;
     IF @day_bits IS NULL
         THROW 50301, N'@days must be weekdays or a day name (monday ... sunday).', 1;
-    IF (@every_minutes IS NULL) <> (@until IS NULL)
+    -- T-SQL has no true/false values to compare: "IS NULL" is a condition,
+    -- usable only in IF/WHERE/CASE, so "one set and the other not" is spelled out.
+    IF (@every_minutes IS NULL AND @until IS NOT NULL) OR (@every_minutes IS NOT NULL AND @until IS NULL)
         THROW 50302, N'@every_minutes and @until go together.', 1;
 
+    -- Every value is computed into a variable first: EXEC accepts only
+    -- constants and variables as parameter values, never expressions
+    -- (no CASE, no function calls, no arithmetic).
     DECLARE @start INT = DATEPART(HOUR, @at) * 10000 + DATEPART(MINUTE, @at) * 100;
     DECLARE @end   INT = CASE WHEN @until IS NULL THEN 235959
                               ELSE DATEPART(HOUR, @until) * 10000 + DATEPART(MINUTE, @until) * 100 END;
+    DECLARE @subday_type     INT = CASE WHEN @every_minutes IS NULL THEN 1 ELSE 4 END;   -- 1 once, 4 every N minutes
+    DECLARE @subday_interval INT = COALESCE(@every_minutes, 0);
 
     EXEC msdb.dbo.sp_add_jobschedule
         @job_id = @job_id,
@@ -161,8 +168,8 @@ BEGIN
         @freq_type = 8,                                         -- weekly, on the days below
         @freq_interval = @day_bits,
         @freq_recurrence_factor = 1,                            -- every week
-        @freq_subday_type = CASE WHEN @every_minutes IS NULL THEN 1 ELSE 4 END,   -- 1 once, 4 minutes
-        @freq_subday_interval = COALESCE(@every_minutes, 0),
+        @freq_subday_type = @subday_type,
+        @freq_subday_interval = @subday_interval,
         @active_start_time = @start,
         @active_end_time = @end;
 END;

@@ -98,7 +98,7 @@ DECLARE @where NVARCHAR(600) = CASE WHEN @target = N'URL'
     THEN N'@URL = ' + dbo.fn_sql_literal(@root) + N', @MaxTransferSize = 4194304, @BlockSize = 65536'
     ELSE N'@Directory = ' + dbo.fn_sql_literal(@root) + N', @CleanupTime = 336, @CleanupMode = N''AFTER_BACKUP'''
 END;
-DECLARE @backup_options NVARCHAR(200) = N', @Compress = N''Y'', @CheckSum = N''Y'', @Verify = N''Y'', @LogToTable = N''Y'';';
+DECLARE @backup_options NVARCHAR(200) = N', @Compress = N''Y'', @Checksum = N''Y'', @Verify = N''Y'', @LogToTable = N''Y'';';
 
 DECLARE @job_id UNIQUEIDENTIFIER, @command NVARCHAR(MAX);
 
@@ -107,7 +107,7 @@ DECLARE @job_id UNIQUEIDENTIFIER, @command NVARCHAR(MAX);
 -- ===========================================================================
 
 -- Full: the base of each day's restores.
-SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SalesDB'', @Type = N''FULL'', ' + @where + @backup_options;
+SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SalesDB'', @BackupType = N''FULL'', ' + @where + @backup_options;
 EXEC dbo.usp_prepare_job @job_name = N'ShopLite - Backup SalesDB FULL', @job_id = @job_id OUTPUT,
     @description = N'Full backup of SalesDB (Ola DatabaseBackup). The base of every restore that day.';
 EXEC msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_name = N'Full backup', @subsystem = N'TSQL',
@@ -117,7 +117,7 @@ EXEC dbo.usp_add_job_schedule @job_id, N'Weekdays 21:30 UTC', 'weekdays', '21:30
 -- Differential: changes since the last full. Restoring the day's diff
 -- skips replaying every log backup before it (faster restores).
 -- ChangeBackupType: if no full exists (e.g. after a rebuild), take a full instead of failing.
-SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SalesDB'', @Type = N''DIFF'', @ChangeBackupType = N''Y'', '
+SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SalesDB'', @BackupType = N''DIFF'', @ChangeBackupType = N''Y'', '
              + @where + @backup_options;
 EXEC dbo.usp_prepare_job @job_name = N'ShopLite - Backup SalesDB DIFF', @job_id = @job_id OUTPUT,
     @description = N'Differential backup of SalesDB: changes since the last full.';
@@ -128,7 +128,7 @@ EXEC dbo.usp_add_job_schedule @job_id, N'Weekdays 17:00 UTC', 'weekdays', '17:00
 -- Log: every 15 minutes during business hours (RPO about 15 minutes), plus
 -- one final backup at 22:50, after the 22:30 restock and the last regular
 -- one, so the day's last changes are in Blob Storage before the VM stops at 23:00.
-SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SalesDB'', @Type = N''LOG'', @ChangeBackupType = N''Y'', '
+SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SalesDB'', @BackupType = N''LOG'', @ChangeBackupType = N''Y'', '
              + @where + @backup_options;
 EXEC dbo.usp_prepare_job @job_name = N'ShopLite - Backup SalesDB LOG', @job_id = @job_id OUTPUT,
     @description = N'Transaction log backup of SalesDB: every 15 minutes in business hours, and a final one at 22:50.';
@@ -141,7 +141,7 @@ EXEC dbo.usp_add_job_schedule @job_id, N'Weekdays final 22:50 UTC', 'weekdays', 
 -- Weekly: the system databases (master: logins and the backup credential;
 -- msdb: these jobs and their history), ReportingDB (rebuildable, SIMPLE
 -- recovery, so weekly is enough), and DBA.
-SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SYSTEM_DATABASES, ReportingDB, DBA'', @Type = N''FULL'', '
+SET @command = N'EXECUTE dbo.DatabaseBackup @Databases = N''SYSTEM_DATABASES, ReportingDB, DBA'', @BackupType = N''FULL'', '
              + @where + @backup_options;
 EXEC dbo.usp_prepare_job @job_name = N'ShopLite - Backup system, ReportingDB, DBA FULL', @job_id = @job_id OUTPUT,
     @description = N'Weekly full backup of master, model, msdb, ReportingDB, and DBA.';

@@ -63,10 +63,18 @@ jobs, which we don't create; leave them as they are.
 **3. Run it** (after `020`, so DBA exists):
 
 ```bash
-# Local
+# Local: copy the file INTO the container, then run it with -i (not piped in with <)
 SQLCMD='/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -I -b'
-docker exec -i shoplite-sql sh -c "$SQLCMD" < ~/Downloads/MaintenanceSolution.sql
+docker cp ~/Downloads/MaintenanceSolution.sql shoplite-sql:/tmp/MaintenanceSolution.sql
+docker exec shoplite-sql sh -c "$SQLCMD -i /tmp/MaintenanceSolution.sql"
+docker exec shoplite-sql rm /tmp/MaintenanceSolution.sql
 ```
+
+**Why not `< MaintenanceSolution.sql` like the other scripts:** Ola's file starts with a UTF-8
+**byte order mark** (three invisible bytes, `EF BB BF`, that mark a file as UTF-8). `sqlcmd -i` reads a
+file, recognizes the mark, and skips it. Piped in through standard input, sqlcmd doesn't, so the
+invisible bytes end up glued to the first statement (`USE [DBA]`) and it fails with a syntax error.
+Our own scripts have no byte order mark, so piping them works.
 
 ```powershell
 # VM
