@@ -9,8 +9,12 @@ run it by hand:
     server/etl/.venv/bin/python server/etl/run_etl.py            # a real run
     server/etl/.venv/bin/python server/etl/run_etl.py --check    # validate only
 
-Settings come from server/etl/.env (template: .env.example). Environment
-variables already set win over the file.
+Settings come in layers (tools/envconfig.py): real environment variables,
+then server/etl/.env if present, then the repo's root .env. Locally the root
+.env is enough: the SalesDB password falls back to SHOPLITE_ETL_PASSWORD, and
+the vendor URL is built from SHOPLITE_READER_PASSWORD, VENDOR_HOST/PORT, and
+POSTGRES_DB (encoded). On the VM server/etl/.env is the only source
+(LOAD_ROOT_ENV=false).
 
 A run, step by step (each step's name is what ops.etl_runs.error_stage says
 when it fails):
@@ -51,10 +55,12 @@ from pathlib import Path
 import psycopg
 import pyodbc
 import yaml
-from dotenv import load_dotenv
 from psycopg.conninfo import conninfo_to_dict
 
 from contract import load_contract, validate
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "tools"))
+from envconfig import load_layers, vendor_url  # noqa: E402
 
 ETL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = ETL_DIR.parent.parent
@@ -109,6 +115,28 @@ def setting(name: str, default: str | None = None) -> str:
     raise ConfigError(f"{name} is not set (see server/etl/.env.example)")
 
 
+def required_password() -> str:
+    """SALESDB_PASSWORD (server/etl/.env, e.g. on the VM), or the root .env's
+    canonical SHOPLITE_ETL_PASSWORD (locally)."""
+    for name in ("SALESDB_PASSWORD", "SHOPLITE_ETL_PASSWORD"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    raise ConfigError("No SalesDB password: set SALESDB_PASSWORD in server/etl/.env, "
+                      "or SHOPLITE_ETL_PASSWORD in the root .env")
+
+
+def required_vendor_url() -> str:
+    """VENDOR_READER_URL exactly as given (Neon), or built from the root .env's
+    parts (shoplite_reader, SHOPLITE_READER_PASSWORD, VENDOR_HOST/PORT, POSTGRES_DB),
+    with the password percent-encoded."""
+    url = vendor_url("reader", explicit="VENDOR_READER_URL")
+    if not url:
+        raise ConfigError("No vendor URL: set VENDOR_READER_URL in server/etl/.env, or "
+                          "SHOPLITE_READER_PASSWORD and POSTGRES_DB in the root .env")
+    return url
+
+
 def number(name: str, default: int) -> int:
     value = setting(name, str(default))
     if not value.isdigit() or int(value) <= 0:
@@ -116,8 +144,14 @@ def number(name: str, default: int) -> int:
     return int(value)
 
 
-def flag(name: str) -> bool:
-    value = setting(name).lower()
+def flag(name: str, fallback: str | None = None, default: str | None = None) -> bool:
+    """true/false from NAME, else from FALLBACK (a root .env name), else DEFAULT."""
+    value = (os.environ.get(name, "").strip()
+             or (os.environ.get(fallback, "").strip() if fallback else "")
+             or default)
+    if value is None:
+        raise ConfigError(f"{name} is not set (see server/etl/.env.example)")
+    value = value.lower()
     if value not in ("true", "false"):
         raise ConfigError(f"{name} must be true or false, found '{value}'")
     return value == "true"
@@ -125,15 +159,19 @@ def flag(name: str) -> bool:
 
 def load_settings() -> Settings:
     return Settings(
-        vendor_url=setting("VENDOR_READER_URL"),
+        vendor_url=required_vendor_url(),
         vendor_connect_timeout=number("VENDOR_CONNECT_TIMEOUT_SECONDS", 15),
         vendor_statement_timeout=number("VENDOR_STATEMENT_TIMEOUT_SECONDS", 120),
         salesdb_host=setting("SALESDB_HOST", "localhost"),
         salesdb_port=number("SALESDB_PORT", 1433),
         salesdb_name=setting("SALESDB_NAME", "SalesDB"),
         salesdb_user=setting("SALESDB_USER", "shoplite_etl"),
-        salesdb_password=setting("SALESDB_PASSWORD"),
-        salesdb_trust_certificate=flag("SALESDB_TRUST_SERVER_CERTIFICATE"),
+        salesdb_password=required_password(),
+        # Own name, else the root .env's SQL_TRUST_SERVER_CERTIFICATE, else true: the
+        # ETL only ever connects to SQL Server on the same machine (the VM, or the
+        # local container), whose certificate is self-signed. The VM's .env sets it.
+        salesdb_trust_certificate=flag("SALESDB_TRUST_SERVER_CERTIFICATE",
+                                       fallback="SQL_TRUST_SERVER_CERTIFICATE", default="true"),
         salesdb_connect_timeout=number("SALESDB_CONNECT_TIMEOUT_SECONDS", 10),
         salesdb_query_timeout=number("SALESDB_QUERY_TIMEOUT_SECONDS", 300),
     )
@@ -372,12 +410,13 @@ def main() -> int:
     parser.add_argument("--check", action="store_true",
                         help="only validate the vendor against the contract; don't touch SalesDB")
     parser.add_argument("--env-file", type=Path, default=ETL_DIR / ".env",
-                        help="settings file (default: server/etl/.env)")
+                        help="the ETL's own settings file (default: server/etl/.env); the root .env "
+                             "is read after it unless it says LOAD_ROOT_ENV=false")
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT,
                         help="contract file (default: knowledge/contracts/vendor-supplier-feed.yml)")
     args = parser.parse_args()
 
-    load_dotenv(args.env_file)          # doesn't override variables already set
+    load_layers(own_env=args.env_file)  # own file, then the root .env; never overrides what's set
     try:
         settings = load_settings()
         contract = load_contract(args.contract)

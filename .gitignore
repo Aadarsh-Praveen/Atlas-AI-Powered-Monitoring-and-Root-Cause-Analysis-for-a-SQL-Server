@@ -28,6 +28,14 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+# The monitoring collector's local state and buffer (watermarks, unsent
+# records) when it runs on the Mac; on the VM they live in F:\collector.
+server/collector/.data/
+# The incident injector's local ground truth (the answer key) and state.
+# Production ground truth lives in its own storage account, never in Git.
+incidents/.ground-truth/
+incidents/.ground-truth-unsent/
+incidents/.state/
 htmlcov/
 *.egg-info/
 dist/

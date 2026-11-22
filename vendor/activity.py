@@ -33,26 +33,22 @@ from pathlib import Path
 
 import psycopg
 
-from pg_url import postgres_url             # vendor/pg_url.py (this script's folder is on the import path)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+from envconfig import load_layers, vendor_url  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def activity_url() -> str:
-    """VENDOR_ACTIVITY_URL if set (Neon, GitHub Actions); else the local
-    vendor-pg container as vendor_activity, with VENDOR_ACTIVITY_PASSWORD
-    from the environment and the database name from the root .env."""
-    url = os.environ.get("VENDOR_ACTIVITY_URL", "").strip()
-    if url:
-        return url
-    password = os.environ.get("VENDOR_ACTIVITY_PASSWORD", "").strip()
-    if not password:
-        sys.exit("[FAIL] Set VENDOR_ACTIVITY_URL, or VENDOR_ACTIVITY_PASSWORD for the local vendor-pg.")
-    from dotenv import load_dotenv            # only needed for local runs
-    load_dotenv(REPO_ROOT / ".env")
-    database = os.getenv("POSTGRES_DB") or sys.exit("[FAIL] POSTGRES_DB is missing from the root .env.")
-    # Encoded: a password with @, #, %, / ... would otherwise break the URL.
-    return postgres_url("vendor_activity", password, "localhost", 5433, database)
+    """VENDOR_ACTIVITY_URL as given (Neon, GitHub Actions: no .env files there,
+    so nothing else is read), else built from the layered settings (vendor/.env
+    if present, then the root .env): VENDOR_ACTIVITY_PASSWORD (percent-encoded),
+    POSTGRES_DB, VENDOR_HOST (localhost), VENDOR_PORT (5433)."""
+    load_layers(Path(__file__).resolve().parent)
+    url = vendor_url("activity", explicit="VENDOR_ACTIVITY_URL")
+    if not url:
+        sys.exit("[FAIL] Set VENDOR_ACTIVITY_URL, or VENDOR_ACTIVITY_PASSWORD and POSTGRES_DB in the root .env.")
+    return url
 
 
 def write_summary(lines: list[str]) -> None:

@@ -41,7 +41,7 @@ users by `LOAD_FLASH_MULTIPLIER`.
 | `LOAD_DURATION_SECONDS` | `600` | Each session stops after this long |
 | `LOAD_CLOCK` | unset | Pretend it's this Boston time, e.g. `fri 11:58`; the fake clock runs forward with the session |
 | `LOAD_SHAPE` | `on` | `off` = no shape; you set users and spawn rate yourself |
-| `SHOPLITE_ADMIN_TOKEN` | unset | Enables `AdminUser` |
+| `SHOPLITE_ADMIN_TOKEN` | unset | Enables `AdminUser`. Locally the root `.env`'s `ADMIN_TOKEN` is used when this isn't set (layered settings, `tools/envconfig.py`) |
 
 **Safe defaults, on purpose.** The VM is a burstable B2as_v2: sustained load drains its CPU credits,
 and then it's throttled to about 40% of its CPU. Five users at peak stays well under that, and the

@@ -1,0 +1,21 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "EventId": "example",
+    "DatabaseName": "example",
+    "WindowStart": "2026-11-22T15:00:00.000000Z",
+    "QueryId": 1,
+    "PlanId": 1,
+    "QueryHash": "example",
+    "PlanHash": "example",
+    "IsForcedPlan": true,
+    "Executions": 1,
+    "TotalDurationMs": 1.5,
+    "TotalCpuMs": 1.5,
+    "TotalLogicalReads": 1.5,
+    "MaxDurationMs": 1.5,
+    "PlansForQuery": 1,
+    "QueryText": "example"
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "DatabaseName": "example",
+    "State": "example",
+    "RecoveryModel": "example",
+    "LogReuseWait": "example",
+    "DataSizeMB": 1.5,
+    "DataUsedMB": 1.5,
+    "LogSizeMB": 1.5,
+    "LogUsedPercent": 1.5,
+    "LastFullBackupAt": "2026-11-22T15:00:00.000000Z",
+    "LastDiffBackupAt": "2026-11-22T15:00:00.000000Z",
+    "LastLogBackupAt": "2026-11-22T15:00:00.000000Z"
+  }
+]

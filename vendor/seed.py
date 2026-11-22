@@ -35,9 +35,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
-from dotenv import load_dotenv
-
-from pg_url import postgres_url             # vendor/pg_url.py (this script's folder is on the import path)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+from envconfig import load_layers, vendor_url  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHOPLITE_SEED = REPO_ROOT / "shoplite" / "db" / "seed.py"
@@ -75,17 +74,14 @@ def load_shoplite_products(seed: int, count: int) -> list[tuple[str, str, int]]:
 
 
 def admin_url() -> str:
-    """VENDOR_ADMIN_URL if set (Neon), else the local vendor-pg container."""
-    url = os.environ.get("VENDOR_ADMIN_URL", "").strip()
-    if url:
-        return url
-    load_dotenv(REPO_ROOT / ".env")
-    user, password, db = (os.getenv("POSTGRES_USER"), os.getenv("POSTGRES_PASSWORD"),
-                          os.getenv("POSTGRES_DB"))
-    if not (user and password and db):
+    """VENDOR_ADMIN_URL as given (Neon), else built from the layered settings
+    (vendor/.env if present, then the root .env): POSTGRES_USER, POSTGRES_PASSWORD
+    (percent-encoded), POSTGRES_DB, VENDOR_HOST (localhost), VENDOR_PORT (5433)."""
+    load_layers(Path(__file__).resolve().parent)
+    url = vendor_url("admin", explicit="VENDOR_ADMIN_URL")
+    if not url:
         sys.exit("[FAIL] Set VENDOR_ADMIN_URL, or POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB in the root .env.")
-    # Encoded: a password with @, #, %, / ... would otherwise break the URL.
-    return postgres_url(user, password, "localhost", 5433, db)
+    return url
 
 
 def main() -> int:

@@ -9,10 +9,10 @@ Code checks a flag where behavior differs:
     if flags.is_enabled("example_flag"):
         ...  # alternative behavior
 
-Phase 1: the registry below is EMPTY and every flag is off. Phase 5 registers
-flags that switch on deliberate "buggy release" behavior for incident
-scenarios. Keeping the mechanism separate from the scenarios means the normal
-code path is always the default.
+Phase 1 had an empty registry. Phase 5 (API 1.2.0) registers the first
+flag, a new feature whose rollout is the "API fault" incident scenario (see
+app/ranking.py). Keeping the mechanism separate from the scenarios means the
+normal code path is always the default.
 
 Two kinds of typo are caught:
   - in configuration: validate_configured_flags() refuses to start the API if
@@ -24,8 +24,11 @@ Two kinds of typo are caught:
 from app.config import get_settings
 
 # Registry of every flag the code knows about: name -> what turning it on does.
-# Names are lowercase with underscores. Empty in Phase 1.
-KNOWN_FLAGS: dict[str, str] = {}
+# Names are lowercase with underscores.
+KNOWN_FLAGS: dict[str, str] = {
+    "search_ranking_v2": "Product search results in relevance order, scored by the ranking service "
+                         "(app/ranking.py)",
+}
 
 
 def validate_configured_flags() -> None:

@@ -1,0 +1,15 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "RunId": 1,
+    "StartedAt": "2026-11-22T15:00:00.000000Z",
+    "Status": "example",
+    "FullBackupFinishedAt": "2026-11-22T15:00:00.000000Z",
+    "LogBackupsRestored": 1,
+    "RestoredTo": "2026-11-22T15:00:00.000000Z",
+    "RestoreSeconds": 1,
+    "CheckdbSeconds": 1,
+    "ErrorMessage": "example"
+  }
+]

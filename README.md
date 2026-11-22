@@ -26,7 +26,9 @@ the owner's machine only** (it's in `.gitignore`), so those files aren't on GitH
 │   ├── web/                Next.js storefront
 │   └── traffic/            Playwright personas, Locust
 ├── server/                 SQL Agent jobs, Extended Events, collector, vendor ETL
-├── injector/               scripts that cause each incident scenario
+├── vendor/                 the vendor's Postgres: schema, seed, daily changes
+├── observability/          monitoring: table schema, ADX, alerts, Grafana dashboards
+├── incidents/              the incident injector (never readable by Atlas)
 ├── atlas/
 │   ├── mcp/                read-only MCP servers
 │   ├── agents/             agent definitions and workflows
@@ -59,6 +61,42 @@ cp .env.example .env
 Open `.env` and replace each `replace-me` with a real password from your password manager.
 `SA_PASSWORD` must meet SQL Server's complexity rules (see the comments in `.env.example`).
 `.env` is ignored by Git and must never be committed.
+
+**This root `.env` is the only settings file you need locally.** Every component reads settings in
+layers (`tools/envconfig.py`): real environment variables first, then the component's own `.env` if it
+has one, then this root `.env`. A value set higher up always wins. Each login has one variable here,
+and components build their connection strings and Postgres URLs from these parts (encoding special
+characters). A component's own `.env` is only needed **on the VM**, or to override one value locally.
+
+### Settings: which component uses what
+
+| Root variable | Docker | DB scripts¹ | API | ETL | Collector | Injector | Vendor scripts² | Shoppers, Locust |
+|---|---|---|---|---|---|---|---|---|
+| `SA_PASSWORD`, `SQL_ADMIN_USER` | ✓ | ✓ |  |  |  | ✓ (local "admin" sessions) |  |  |
+| `SQL_TRUST_SERVER_CERTIFICATE` |  |  | ✓ (as `DB_TRUST_SERVER_CERTIFICATE`) | ✓ (as `SALESDB_TRUST_SERVER_CERTIFICATE`) | ✓ | ✓ |  |  |
+| `SHOPLITE_APP_PASSWORD` |  | ✓ (creates the login) | ✓ (as `DB_PASSWORD`) |  |  | ✓ (app-like sessions) |  |  |
+| `SHOPLITE_ETL_PASSWORD` |  | ✓ (ETL login script) |  | ✓ (as `SALESDB_PASSWORD`) |  |  |  |  |
+| `SHOPLITE_MONITOR_PASSWORD` |  | ✓ (monitor login script) |  |  | ✓ (as `SQL_PASSWORD`) |  |  |  |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | ✓ |  |  | ✓ (database name) | ✓ (database name) | ✓ (vendor admin) | ✓ |  |
+| `SHOPLITE_READER_PASSWORD` |  | ✓ (vendor roles) |  | ✓ (reader URL) | ✓ (reader URL) |  |  |  |
+| `VENDOR_ACTIVITY_PASSWORD` |  | ✓ (vendor roles) |  |  |  |  | ✓ (`activity.py`) |  |
+| `VENDOR_HOST`, `VENDOR_PORT` |  |  |  | ✓ | ✓ | ✓ | ✓ |  |
+| `ADMIN_TOKEN` |  |  | ✓ |  |  | ✓ |  | ✓ (as `SHOPLITE_ADMIN_TOKEN`) |
+| `STOREFRONT_URL`, `API_URL` |  |  |  |  |  |  |  | ✓ |
+
+¹ `shoplite/db/apply_schema.py` and `seed.py`, `tools/check_local.py` (these three only ever read the
+root `.env`), and the login scripts you run with sqlcmd (pass the same value as in this file).
+² `vendor/seed.py`, `vendor/activity.py`.
+
+Every other setting has a local default (hosts `localhost`, ports, database and login names, timeouts),
+so locally the root `.env` is all you need. The VM templates still set every value explicitly.
+
+"as `DB_PASSWORD`" means the component's own name for it: if its own `.env` sets that name, it wins;
+if not, it uses the root variable. That's how the **VM** works: each service (API, ETL, collector)
+runs as its own account and has its own `.env`, locked by ACL, with `LOAD_ROOT_ENV=false`, so the root
+`.env` (admin passwords, Administrators only) is never read by a service, even when you run one by hand.
+Full URLs given explicitly (Neon's `VENDOR_READER_URL`, the GitHub secret `VENDOR_ACTIVITY_URL`) are
+used exactly as given.
 
 ### 2. Start the databases
 

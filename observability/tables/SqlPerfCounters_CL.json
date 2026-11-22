@@ -1,0 +1,10 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "ObjectName": "example",
+    "CounterName": "example",
+    "InstanceName": "example",
+    "Value": 1.5
+  }
+]

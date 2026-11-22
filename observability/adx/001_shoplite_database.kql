@@ -1,0 +1,166 @@
+// observability/adx/001_shoplite_database.kql
+//
+// The shoplite database in the free ADX cluster: the collector's 16 tables
+// (the same names and columns as in Log Analytics, from observability/schema.yml),
+// a JSON ingestion mapping per table, 12 months of retention, and five hourly
+// rollups (materialized views) for long-range charts and, later, forecasting.
+//
+// How to run (the owner, in the ADX web UI, https://dataexplorer.azure.com,
+// connected to the free cluster, database "shoplite" selected):
+//   PART 1: select everything from ".execute database script" to the end of
+//           PART 1 and run it once. It runs every command in order and stops at
+//           the first error. Safe to re-run:
+//             .create-merge table      creates the table, or adds new columns to it;
+//                                      never drops a column or any data
+//             .create-or-alter mapping replaces the mapping with this one
+//             .alter-merge policy      sets only the values given
+//   PART 2: run each ".create ifnotexists materialized-view" command on its
+//           own (select it, Run). They're separate because a materialized view
+//           is created in the background. Re-running one that exists does nothing.
+//
+// Why mappings: the collector sends JSON records whose property names are the
+// column names. A mapping ("collector_json") tells ADX which property goes into
+// which column, so a column added later can't shift the others.
+//
+// Free cluster limits that shaped this script (checked 2026-11-22, see
+// observability/adx-grafana-setup.md in B3): at most 5 materialized views per
+// database (all 5 are used below), 100 tables, 200 columns per table, about
+// 100 GB uncompressed (20 GB compressed) of storage. No managed identities: the
+// collector ingests with an app registration (B2/B3).
+//
+// Tables (frequency): CollectorHeartbeat_CL, SqlWaitStats_CL, SqlPerfCounters_CL,
+// SqlSessions_CL, SqlBlocking_CL, SqlXEvents_CL (1 min); SqlDatabases_CL,
+// SqlFileIo_CL, SqlAgentJobRuns_CL, SqlBackups_CL, OpsEtlRuns_CL,
+// OpsRefreshRuns_CL, DbaRestoreTests_CL, DbaCommandLog_CL (5 min);
+// SqlTopQueries_CL, VendorFeed_CL (15 min).
+
+// =============================================================================
+// PART 1: tables, mappings, retention (one run)
+// =============================================================================
+// Retention (first command): 12 months of history for everything, including the
+// rollups below. At about 300 MB a month of raw data, a year stays far inside the
+// free cluster's storage. (No comments inside the script itself: everything
+// after "<|" is read as commands, separated by blank lines.)
+.execute database script with (ContinueOnErrors = false) <|
+.alter-merge database shoplite policy retention softdelete = 365d
+
+.create-merge table CollectorHeartbeat_CL (TimeGenerated: datetime, Computer: string, CollectorVersion: string, CycleSeconds: real, QueriesRun: int, QueriesFailed: int, FailedCollections: string, LastError: string, BufferedRecords: long, SqlOk: bool, LogAnalyticsOk: bool, AdxOk: bool)
+
+.create-or-alter table CollectorHeartbeat_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"CollectorVersion","Properties":{"Path":"$.CollectorVersion"}},{"column":"CycleSeconds","Properties":{"Path":"$.CycleSeconds"}},{"column":"QueriesRun","Properties":{"Path":"$.QueriesRun"}},{"column":"QueriesFailed","Properties":{"Path":"$.QueriesFailed"}},{"column":"FailedCollections","Properties":{"Path":"$.FailedCollections"}},{"column":"LastError","Properties":{"Path":"$.LastError"}},{"column":"BufferedRecords","Properties":{"Path":"$.BufferedRecords"}},{"column":"SqlOk","Properties":{"Path":"$.SqlOk"}},{"column":"LogAnalyticsOk","Properties":{"Path":"$.LogAnalyticsOk"}},{"column":"AdxOk","Properties":{"Path":"$.AdxOk"}}]'
+
+.create-merge table SqlWaitStats_CL (TimeGenerated: datetime, Computer: string, WaitType: string, WaitTimeMs: long, SignalWaitTimeMs: long, WaitingTasks: long, IntervalSeconds: real)
+
+.create-or-alter table SqlWaitStats_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"WaitType","Properties":{"Path":"$.WaitType"}},{"column":"WaitTimeMs","Properties":{"Path":"$.WaitTimeMs"}},{"column":"SignalWaitTimeMs","Properties":{"Path":"$.SignalWaitTimeMs"}},{"column":"WaitingTasks","Properties":{"Path":"$.WaitingTasks"}},{"column":"IntervalSeconds","Properties":{"Path":"$.IntervalSeconds"}}]'
+
+.create-merge table SqlPerfCounters_CL (TimeGenerated: datetime, Computer: string, ObjectName: string, CounterName: string, InstanceName: string, Value: real)
+
+.create-or-alter table SqlPerfCounters_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"ObjectName","Properties":{"Path":"$.ObjectName"}},{"column":"CounterName","Properties":{"Path":"$.CounterName"}},{"column":"InstanceName","Properties":{"Path":"$.InstanceName"}},{"column":"Value","Properties":{"Path":"$.Value"}}]'
+
+.create-merge table SqlSessions_CL (TimeGenerated: datetime, Computer: string, DatabaseName: string, ProgramName: string, LoginName: string, HostName: string, Sessions: int, RunningRequests: int, BlockedRequests: int, OpenTransactionSessions: int, LongestRequestSeconds: real)
+
+.create-or-alter table SqlSessions_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"ProgramName","Properties":{"Path":"$.ProgramName"}},{"column":"LoginName","Properties":{"Path":"$.LoginName"}},{"column":"HostName","Properties":{"Path":"$.HostName"}},{"column":"Sessions","Properties":{"Path":"$.Sessions"}},{"column":"RunningRequests","Properties":{"Path":"$.RunningRequests"}},{"column":"BlockedRequests","Properties":{"Path":"$.BlockedRequests"}},{"column":"OpenTransactionSessions","Properties":{"Path":"$.OpenTransactionSessions"}},{"column":"LongestRequestSeconds","Properties":{"Path":"$.LongestRequestSeconds"}}]'
+
+.create-merge table SqlBlocking_CL (TimeGenerated: datetime, Computer: string, Role: string, SessionId: int, BlockedBy: int, HeadBlocker: int, WaitType: string, WaitSeconds: real, WaitResource: string, DatabaseName: string, ProgramName: string, LoginName: string, HostName: string, SessionStatus: string, OpenTransactions: int, TransactionSeconds: real, StatementText: string)
+
+.create-or-alter table SqlBlocking_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"Role","Properties":{"Path":"$.Role"}},{"column":"SessionId","Properties":{"Path":"$.SessionId"}},{"column":"BlockedBy","Properties":{"Path":"$.BlockedBy"}},{"column":"HeadBlocker","Properties":{"Path":"$.HeadBlocker"}},{"column":"WaitType","Properties":{"Path":"$.WaitType"}},{"column":"WaitSeconds","Properties":{"Path":"$.WaitSeconds"}},{"column":"WaitResource","Properties":{"Path":"$.WaitResource"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"ProgramName","Properties":{"Path":"$.ProgramName"}},{"column":"LoginName","Properties":{"Path":"$.LoginName"}},{"column":"HostName","Properties":{"Path":"$.HostName"}},{"column":"SessionStatus","Properties":{"Path":"$.SessionStatus"}},{"column":"OpenTransactions","Properties":{"Path":"$.OpenTransactions"}},{"column":"TransactionSeconds","Properties":{"Path":"$.TransactionSeconds"}},{"column":"StatementText","Properties":{"Path":"$.StatementText"}}]'
+
+.create-merge table SqlXEvents_CL (TimeGenerated: datetime, Computer: string, EventId: string, EventName: string, SessionId: int, DatabaseName: string, ClientApp: string, LoginName: string, ClientHost: string, QueryHash: string, DurationMs: real, CpuMs: real, LogicalReads: long, ErrorNumber: int, Severity: int, Message: string, SqlText: string, EventXml: string, EventXmlTruncated: bool)
+
+.create-or-alter table SqlXEvents_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"EventId","Properties":{"Path":"$.EventId"}},{"column":"EventName","Properties":{"Path":"$.EventName"}},{"column":"SessionId","Properties":{"Path":"$.SessionId"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"ClientApp","Properties":{"Path":"$.ClientApp"}},{"column":"LoginName","Properties":{"Path":"$.LoginName"}},{"column":"ClientHost","Properties":{"Path":"$.ClientHost"}},{"column":"QueryHash","Properties":{"Path":"$.QueryHash"}},{"column":"DurationMs","Properties":{"Path":"$.DurationMs"}},{"column":"CpuMs","Properties":{"Path":"$.CpuMs"}},{"column":"LogicalReads","Properties":{"Path":"$.LogicalReads"}},{"column":"ErrorNumber","Properties":{"Path":"$.ErrorNumber"}},{"column":"Severity","Properties":{"Path":"$.Severity"}},{"column":"Message","Properties":{"Path":"$.Message"}},{"column":"SqlText","Properties":{"Path":"$.SqlText"}},{"column":"EventXml","Properties":{"Path":"$.EventXml"}},{"column":"EventXmlTruncated","Properties":{"Path":"$.EventXmlTruncated"}}]'
+
+.create-merge table SqlDatabases_CL (TimeGenerated: datetime, Computer: string, DatabaseName: string, State: string, RecoveryModel: string, LogReuseWait: string, DataSizeMB: real, DataUsedMB: real, LogSizeMB: real, LogUsedPercent: real, LastFullBackupAt: datetime, LastDiffBackupAt: datetime, LastLogBackupAt: datetime)
+
+.create-or-alter table SqlDatabases_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"State","Properties":{"Path":"$.State"}},{"column":"RecoveryModel","Properties":{"Path":"$.RecoveryModel"}},{"column":"LogReuseWait","Properties":{"Path":"$.LogReuseWait"}},{"column":"DataSizeMB","Properties":{"Path":"$.DataSizeMB"}},{"column":"DataUsedMB","Properties":{"Path":"$.DataUsedMB"}},{"column":"LogSizeMB","Properties":{"Path":"$.LogSizeMB"}},{"column":"LogUsedPercent","Properties":{"Path":"$.LogUsedPercent"}},{"column":"LastFullBackupAt","Properties":{"Path":"$.LastFullBackupAt"}},{"column":"LastDiffBackupAt","Properties":{"Path":"$.LastDiffBackupAt"}},{"column":"LastLogBackupAt","Properties":{"Path":"$.LastLogBackupAt"}}]'
+
+.create-merge table SqlFileIo_CL (TimeGenerated: datetime, Computer: string, DatabaseName: string, FileLogicalName: string, FileType: string, Reads: long, Writes: long, ReadBytes: long, WriteBytes: long, ReadStallMs: long, WriteStallMs: long, IntervalSeconds: real)
+
+.create-or-alter table SqlFileIo_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"FileLogicalName","Properties":{"Path":"$.FileLogicalName"}},{"column":"FileType","Properties":{"Path":"$.FileType"}},{"column":"Reads","Properties":{"Path":"$.Reads"}},{"column":"Writes","Properties":{"Path":"$.Writes"}},{"column":"ReadBytes","Properties":{"Path":"$.ReadBytes"}},{"column":"WriteBytes","Properties":{"Path":"$.WriteBytes"}},{"column":"ReadStallMs","Properties":{"Path":"$.ReadStallMs"}},{"column":"WriteStallMs","Properties":{"Path":"$.WriteStallMs"}},{"column":"IntervalSeconds","Properties":{"Path":"$.IntervalSeconds"}}]'
+
+.create-merge table SqlTopQueries_CL (TimeGenerated: datetime, Computer: string, EventId: string, DatabaseName: string, WindowStart: datetime, QueryId: long, PlanId: long, QueryHash: string, PlanHash: string, IsForcedPlan: bool, Executions: long, TotalDurationMs: real, TotalCpuMs: real, TotalLogicalReads: real, MaxDurationMs: real, PlansForQuery: int, QueryText: string)
+
+.create-or-alter table SqlTopQueries_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"EventId","Properties":{"Path":"$.EventId"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"WindowStart","Properties":{"Path":"$.WindowStart"}},{"column":"QueryId","Properties":{"Path":"$.QueryId"}},{"column":"PlanId","Properties":{"Path":"$.PlanId"}},{"column":"QueryHash","Properties":{"Path":"$.QueryHash"}},{"column":"PlanHash","Properties":{"Path":"$.PlanHash"}},{"column":"IsForcedPlan","Properties":{"Path":"$.IsForcedPlan"}},{"column":"Executions","Properties":{"Path":"$.Executions"}},{"column":"TotalDurationMs","Properties":{"Path":"$.TotalDurationMs"}},{"column":"TotalCpuMs","Properties":{"Path":"$.TotalCpuMs"}},{"column":"TotalLogicalReads","Properties":{"Path":"$.TotalLogicalReads"}},{"column":"MaxDurationMs","Properties":{"Path":"$.MaxDurationMs"}},{"column":"PlansForQuery","Properties":{"Path":"$.PlansForQuery"}},{"column":"QueryText","Properties":{"Path":"$.QueryText"}}]'
+
+.create-merge table SqlAgentJobRuns_CL (TimeGenerated: datetime, Computer: string, JobName: string, Category: string, Outcome: string, StartedAt: datetime, DurationSeconds: int, Message: string, FailedStepName: string, FailedStepMessage: string, HistoryId: long)
+
+.create-or-alter table SqlAgentJobRuns_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"JobName","Properties":{"Path":"$.JobName"}},{"column":"Category","Properties":{"Path":"$.Category"}},{"column":"Outcome","Properties":{"Path":"$.Outcome"}},{"column":"StartedAt","Properties":{"Path":"$.StartedAt"}},{"column":"DurationSeconds","Properties":{"Path":"$.DurationSeconds"}},{"column":"Message","Properties":{"Path":"$.Message"}},{"column":"FailedStepName","Properties":{"Path":"$.FailedStepName"}},{"column":"FailedStepMessage","Properties":{"Path":"$.FailedStepMessage"}},{"column":"HistoryId","Properties":{"Path":"$.HistoryId"}}]'
+
+.create-merge table SqlBackups_CL (TimeGenerated: datetime, Computer: string, DatabaseName: string, BackupType: string, StartedAt: datetime, SizeMB: real, CompressedMB: real, IsCopyOnly: bool, Device: string, BackupSetId: long)
+
+.create-or-alter table SqlBackups_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"BackupType","Properties":{"Path":"$.BackupType"}},{"column":"StartedAt","Properties":{"Path":"$.StartedAt"}},{"column":"SizeMB","Properties":{"Path":"$.SizeMB"}},{"column":"CompressedMB","Properties":{"Path":"$.CompressedMB"}},{"column":"IsCopyOnly","Properties":{"Path":"$.IsCopyOnly"}},{"column":"Device","Properties":{"Path":"$.Device"}},{"column":"BackupSetId","Properties":{"Path":"$.BackupSetId"}}]'
+
+.create-merge table OpsEtlRuns_CL (TimeGenerated: datetime, Computer: string, RunId: long, Feed: string, ContractVersion: string, StartedAt: datetime, Status: string, DurationSeconds: real, RowsRead: int, RowsSkipped: int, RowsInserted: int, RowsUpdated: int, RowsDiscontinued: int, RowsUnchanged: int, VendorNewestPriceAt: datetime, ErrorStage: string, ErrorMessage: string)
+
+.create-or-alter table OpsEtlRuns_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"RunId","Properties":{"Path":"$.RunId"}},{"column":"Feed","Properties":{"Path":"$.Feed"}},{"column":"ContractVersion","Properties":{"Path":"$.ContractVersion"}},{"column":"StartedAt","Properties":{"Path":"$.StartedAt"}},{"column":"Status","Properties":{"Path":"$.Status"}},{"column":"DurationSeconds","Properties":{"Path":"$.DurationSeconds"}},{"column":"RowsRead","Properties":{"Path":"$.RowsRead"}},{"column":"RowsSkipped","Properties":{"Path":"$.RowsSkipped"}},{"column":"RowsInserted","Properties":{"Path":"$.RowsInserted"}},{"column":"RowsUpdated","Properties":{"Path":"$.RowsUpdated"}},{"column":"RowsDiscontinued","Properties":{"Path":"$.RowsDiscontinued"}},{"column":"RowsUnchanged","Properties":{"Path":"$.RowsUnchanged"}},{"column":"VendorNewestPriceAt","Properties":{"Path":"$.VendorNewestPriceAt"}},{"column":"ErrorStage","Properties":{"Path":"$.ErrorStage"}},{"column":"ErrorMessage","Properties":{"Path":"$.ErrorMessage"}}]'
+
+.create-merge table OpsRefreshRuns_CL (TimeGenerated: datetime, Computer: string, RunId: long, Mode: string, FromDate: datetime, CutoffAt: datetime, StartedAt: datetime, Status: string, DurationSeconds: real, SaleLines: int, DaysRebuilt: int, RowsWritten: int, ErrorMessage: string)
+
+.create-or-alter table OpsRefreshRuns_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"RunId","Properties":{"Path":"$.RunId"}},{"column":"Mode","Properties":{"Path":"$.Mode"}},{"column":"FromDate","Properties":{"Path":"$.FromDate"}},{"column":"CutoffAt","Properties":{"Path":"$.CutoffAt"}},{"column":"StartedAt","Properties":{"Path":"$.StartedAt"}},{"column":"Status","Properties":{"Path":"$.Status"}},{"column":"DurationSeconds","Properties":{"Path":"$.DurationSeconds"}},{"column":"SaleLines","Properties":{"Path":"$.SaleLines"}},{"column":"DaysRebuilt","Properties":{"Path":"$.DaysRebuilt"}},{"column":"RowsWritten","Properties":{"Path":"$.RowsWritten"}},{"column":"ErrorMessage","Properties":{"Path":"$.ErrorMessage"}}]'
+
+.create-merge table DbaRestoreTests_CL (TimeGenerated: datetime, Computer: string, RunId: long, StartedAt: datetime, Status: string, FullBackupFinishedAt: datetime, LogBackupsRestored: int, RestoredTo: datetime, RestoreSeconds: int, CheckdbSeconds: int, ErrorMessage: string)
+
+.create-or-alter table DbaRestoreTests_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"RunId","Properties":{"Path":"$.RunId"}},{"column":"StartedAt","Properties":{"Path":"$.StartedAt"}},{"column":"Status","Properties":{"Path":"$.Status"}},{"column":"FullBackupFinishedAt","Properties":{"Path":"$.FullBackupFinishedAt"}},{"column":"LogBackupsRestored","Properties":{"Path":"$.LogBackupsRestored"}},{"column":"RestoredTo","Properties":{"Path":"$.RestoredTo"}},{"column":"RestoreSeconds","Properties":{"Path":"$.RestoreSeconds"}},{"column":"CheckdbSeconds","Properties":{"Path":"$.CheckdbSeconds"}},{"column":"ErrorMessage","Properties":{"Path":"$.ErrorMessage"}}]'
+
+.create-merge table DbaCommandLog_CL (TimeGenerated: datetime, Computer: string, CommandLogId: long, DatabaseName: string, CommandType: string, ObjectName: string, IndexName: string, StartedAt: datetime, DurationSeconds: real, ErrorNumber: int, ErrorMessage: string, Command: string)
+
+.create-or-alter table DbaCommandLog_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"CommandLogId","Properties":{"Path":"$.CommandLogId"}},{"column":"DatabaseName","Properties":{"Path":"$.DatabaseName"}},{"column":"CommandType","Properties":{"Path":"$.CommandType"}},{"column":"ObjectName","Properties":{"Path":"$.ObjectName"}},{"column":"IndexName","Properties":{"Path":"$.IndexName"}},{"column":"StartedAt","Properties":{"Path":"$.StartedAt"}},{"column":"DurationSeconds","Properties":{"Path":"$.DurationSeconds"}},{"column":"ErrorNumber","Properties":{"Path":"$.ErrorNumber"}},{"column":"ErrorMessage","Properties":{"Path":"$.ErrorMessage"}},{"column":"Command","Properties":{"Path":"$.Command"}}]'
+
+.create-merge table VendorFeed_CL (TimeGenerated: datetime, Computer: string, Reachable: bool, ConnectMs: real, NewestPriceAt: datetime, FreshnessHours: real, CatalogItems: long, Error: string)
+
+.create-or-alter table VendorFeed_CL ingestion json mapping "collector_json" '[{"column":"TimeGenerated","Properties":{"Path":"$.TimeGenerated"}},{"column":"Computer","Properties":{"Path":"$.Computer"}},{"column":"Reachable","Properties":{"Path":"$.Reachable"}},{"column":"ConnectMs","Properties":{"Path":"$.ConnectMs"}},{"column":"NewestPriceAt","Properties":{"Path":"$.NewestPriceAt"}},{"column":"FreshnessHours","Properties":{"Path":"$.FreshnessHours"}},{"column":"CatalogItems","Properties":{"Path":"$.CatalogItems"}},{"column":"Error","Properties":{"Path":"$.Error"}}]'
+
+// =============================================================================
+// PART 2: hourly rollups (run each command separately)
+//
+// A materialized view keeps a query's result up to date as new rows arrive:
+// here, hourly totals. Charts over months read these instead of every
+// one-minute row. Only aggregations that stay exact when combined are used
+// (sum, min, max, avg of per-row values, dcount): for example file latency is
+// stored as total stall time and operation counts, so latency per hour =
+// sum(stall) / sum(count), computed when queried.
+// =============================================================================
+
+// 1. What SQL Server waited on, per hour.
+.create ifnotexists materialized-view SqlWaitStats_Hourly on table SqlWaitStats_CL
+{
+    SqlWaitStats_CL
+    | summarize WaitTimeMs = sum(WaitTimeMs), SignalWaitTimeMs = sum(SignalWaitTimeMs),
+                WaitingTasks = sum(WaitingTasks)
+        by Computer, WaitType, TimeGenerated = bin(TimeGenerated, 1h)
+}
+
+// 2. Performance counters per hour: average, lowest, and highest value.
+.create ifnotexists materialized-view SqlPerfCounters_Hourly on table SqlPerfCounters_CL
+{
+    SqlPerfCounters_CL
+    | summarize AvgValue = avg(Value), MinValue = min(Value), MaxValue = max(Value)
+        by Computer, ObjectName, CounterName, InstanceName, TimeGenerated = bin(TimeGenerated, 1h)
+}
+
+// 3. File I/O per hour (latency = ReadStallMs / Reads, WriteStallMs / Writes).
+.create ifnotexists materialized-view SqlFileIo_Hourly on table SqlFileIo_CL
+{
+    SqlFileIo_CL
+    | summarize Reads = sum(Reads), Writes = sum(Writes), ReadBytes = sum(ReadBytes),
+                WriteBytes = sum(WriteBytes), ReadStallMs = sum(ReadStallMs), WriteStallMs = sum(WriteStallMs)
+        by Computer, DatabaseName, FileLogicalName, FileType, TimeGenerated = bin(TimeGenerated, 1h)
+}
+
+// 4. Top queries per hour, by query shape (QueryHash): executions, totals, the
+//    slowest run, and how many different plans it used (plan regressions).
+.create ifnotexists materialized-view SqlTopQueries_Hourly on table SqlTopQueries_CL
+{
+    SqlTopQueries_CL
+    | summarize Executions = sum(Executions), TotalDurationMs = sum(TotalDurationMs),
+                TotalCpuMs = sum(TotalCpuMs), TotalLogicalReads = sum(TotalLogicalReads),
+                MaxDurationMs = max(MaxDurationMs), Plans = dcount(PlanHash), QueryText = take_any(QueryText)
+        by Computer, DatabaseName, QueryHash, TimeGenerated = bin(TimeGenerated, 1h)
+}
+
+// 5. Connected sessions per hour, by database and program.
+.create ifnotexists materialized-view SqlSessions_Hourly on table SqlSessions_CL
+{
+    SqlSessions_CL
+    | summarize MaxSessions = max(Sessions), AvgSessions = avg(Sessions),
+                MaxRunningRequests = max(RunningRequests), MaxBlockedRequests = max(BlockedRequests)
+        by Computer, DatabaseName, ProgramName, TimeGenerated = bin(TimeGenerated, 1h)
+}

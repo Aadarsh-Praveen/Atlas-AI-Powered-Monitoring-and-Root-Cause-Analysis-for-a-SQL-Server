@@ -22,6 +22,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DBAPIError
 
+from app import telemetry
 from app.config import Settings, get_settings
 
 logger = logging.getLogger("shoplite.db")
@@ -105,6 +106,9 @@ def create_db_engine(settings: Settings) -> Engine:
         settings.db_pool_size, settings.db_pool_max_overflow,
         settings.db_query_timeout_seconds, settings.session_tag,
     )
+    # Every SQL call becomes an Application Insights dependency (Phase 5);
+    # does nothing when telemetry is off.
+    telemetry.instrument_engine(engine)
     return engine
 
 

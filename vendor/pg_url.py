@@ -17,15 +17,10 @@ whole (VENDOR_ADMIN_URL from Neon's console, VENDOR_ACTIVITY_URL) are used
 as given: Neon's are already encoded.
 """
 
-from urllib.parse import quote, urlencode
+import sys
+from pathlib import Path
 
-
-def postgres_url(user: str, password: str, host: str, port: int, dbname: str, **options: str) -> str:
-    """postgresql://user:password@host:port/dbname[?options], every part encoded."""
-    def encode(value) -> str:
-        return quote(str(value), safe="")
-
-    url = f"postgresql://{encode(user)}:{encode(password)}@{host}:{port}/{encode(dbname)}"
-    if options:
-        url += "?" + urlencode(options)          # e.g. sslmode=require
-    return url
+# One implementation for the whole repo: tools/envconfig.py (layered settings).
+# Kept here so vendor scripts and their tests can keep importing postgres_url.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+from envconfig import postgres_url  # noqa: E402,F401

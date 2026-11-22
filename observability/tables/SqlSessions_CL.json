@@ -1,0 +1,15 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "DatabaseName": "example",
+    "ProgramName": "example",
+    "LoginName": "example",
+    "HostName": "example",
+    "Sessions": 1,
+    "RunningRequests": 1,
+    "BlockedRequests": 1,
+    "OpenTransactionSessions": 1,
+    "LongestRequestSeconds": 1.5
+  }
+]

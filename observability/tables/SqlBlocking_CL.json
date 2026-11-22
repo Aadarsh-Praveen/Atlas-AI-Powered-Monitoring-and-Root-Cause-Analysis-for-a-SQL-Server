@@ -1,0 +1,21 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "Role": "example",
+    "SessionId": 1,
+    "BlockedBy": 1,
+    "HeadBlocker": 1,
+    "WaitType": "example",
+    "WaitSeconds": 1.5,
+    "WaitResource": "example",
+    "DatabaseName": "example",
+    "ProgramName": "example",
+    "LoginName": "example",
+    "HostName": "example",
+    "SessionStatus": "example",
+    "OpenTransactions": 1,
+    "TransactionSeconds": 1.5,
+    "StatementText": "example"
+  }
+]

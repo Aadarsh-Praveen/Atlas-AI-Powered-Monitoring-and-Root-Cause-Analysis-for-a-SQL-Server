@@ -1,0 +1,14 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "DatabaseName": "example",
+    "BackupType": "example",
+    "StartedAt": "2026-11-22T15:00:00.000000Z",
+    "SizeMB": 1.5,
+    "CompressedMB": 1.5,
+    "IsCopyOnly": true,
+    "Device": "example",
+    "BackupSetId": 1
+  }
+]

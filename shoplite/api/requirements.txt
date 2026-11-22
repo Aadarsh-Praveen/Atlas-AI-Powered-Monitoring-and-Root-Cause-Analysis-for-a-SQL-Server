@@ -13,6 +13,10 @@ pyodbc>=5.2,<6                 # SQL Server via Microsoft ODBC Driver 18 (instal
 pydantic>=2.9,<3               # request/response models and validation
 pydantic-settings>=2.6,<3      # reads and validates settings from shoplite/api/.env
 
+# --- Telemetry (Phase 5, API 1.2.0; app/telemetry.py) ---
+azure-monitor-opentelemetry>=1.6,<2          # OpenTelemetry + Application Insights exporter; instruments FastAPI
+opentelemetry-instrumentation-sqlalchemy>=0.48b0   # SQL calls as dependencies (pip matches it to the distro's OpenTelemetry version)
+
 # --- Tests only (not needed to run the API) ---
 pytest>=8.3,<9                 # test runner for tests/
 httpx>=0.27,<1                 # required by FastAPI's TestClient

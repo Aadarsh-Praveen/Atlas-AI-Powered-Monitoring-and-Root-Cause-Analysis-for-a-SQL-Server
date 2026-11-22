@@ -1,0 +1,456 @@
+{
+  "uid": "shoplite-vm",
+  "title": "ShopLite: VM",
+  "description": "prod-sql-01: platform metrics, the Azure Monitor Agent's counters and events, and the collector's own health.",
+  "tags": [
+    "shoplite",
+    "phase5"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "5m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "adx",
+        "label": "History (ADX)",
+        "type": "datasource",
+        "query": "grafana-azure-data-explorer-datasource",
+        "hide": 0
+      },
+      {
+        "name": "azmon",
+        "label": "Now (Azure Monitor)",
+        "type": "datasource",
+        "query": "grafana-azure-monitor-datasource",
+        "hide": 0
+      },
+      {
+        "name": "workspace",
+        "label": "Log Analytics workspace resource ID",
+        "type": "textbox",
+        "hide": 0,
+        "query": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod",
+        "current": {
+          "text": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod",
+          "value": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod"
+        }
+      },
+      {
+        "name": "subscription",
+        "label": "Subscription ID",
+        "type": "textbox",
+        "hide": 0,
+        "query": "<subscription-id>",
+        "current": {
+          "text": "<subscription-id>",
+          "value": "<subscription-id>"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "CPU credits remaining",
+      "description": "The alert fires below 30. Near zero = the VM is throttled to its baseline.",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "${subscription}",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "${subscription}",
+                "resourceGroup": "rg-shoplite-prod",
+                "resourceName": "prod-sql-01",
+                "metricNamespace": "microsoft.compute/virtualmachines",
+                "region": "northcentralus"
+              }
+            ],
+            "metricNamespace": "microsoft.compute/virtualmachines",
+            "metricName": "CPU Credits Remaining",
+            "aggregation": "Average",
+            "timeGrain": "auto"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU (%)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "${subscription}",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "${subscription}",
+                "resourceGroup": "rg-shoplite-prod",
+                "resourceName": "prod-sql-01",
+                "metricNamespace": "microsoft.compute/virtualmachines",
+                "region": "northcentralus"
+              }
+            ],
+            "metricNamespace": "microsoft.compute/virtualmachines",
+            "metricName": "Percentage CPU",
+            "aggregation": "Average",
+            "timeGrain": "auto"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Process CPU: SQL Server and Python (API, collector)",
+      "description": "Process CPU counts each core as 100%, so 2 cores busy = 200%.",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "Perf | where $__timeFilter(TimeGenerated) and ObjectName == \"Process\" and CounterName == \"% Processor Time\"\n            | where InstanceName startswith \"sqlservr\" or InstanceName startswith \"python\"\n            | summarize CpuPercent = avg(CounterValue) by bin(TimeGenerated, $__interval), InstanceName\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory: available MB and committed %",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "Perf | where $__timeFilter(TimeGenerated) and ObjectName == \"Memory\"\n            | summarize Value = avg(CounterValue) by bin(TimeGenerated, $__interval), CounterName\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Free disk space (%)",
+      "description": "F: is the data disk; the alert fires below 20% free.",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "Perf | where $__timeFilter(TimeGenerated) and ObjectName == \"LogicalDisk\" and CounterName == \"% Free Space\"\n            | summarize FreePercent = avg(CounterValue) by bin(TimeGenerated, $__interval), InstanceName\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Data disk F: latency (ms)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "Perf | where $__timeFilter(TimeGenerated) and ObjectName == \"LogicalDisk\" and InstanceName == \"F:\"\n            | where CounterName in (\"Avg. Disk sec/Read\", \"Avg. Disk sec/Write\")\n            | summarize Ms = avg(CounterValue) * 1000 by bin(TimeGenerated, $__interval), CounterName\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Collector: cycle time and buffered records",
+      "description": "Buffered records above 0 = a destination is unreachable; data waits on F:.",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "CollectorHeartbeat_CL | where $__timeFilter(TimeGenerated)\n            | summarize CycleSeconds = max(CycleSeconds), BufferedRecords = max(BufferedRecords)\n                by bin(TimeGenerated, $__interval)\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Windows and SQL Server events (warnings and errors)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "Event | where $__timeFilter(TimeGenerated)\n            | where EventLevelName in (\"Error\", \"Warning\") or Source == \"MSSQLSERVER\"\n            | project TimeGenerated, EventLog, Source, EventID, EventLevelName, RenderedDescription\n            | order by TimeGenerated desc | take 100",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "table"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      }
+    }
+  ]
+}

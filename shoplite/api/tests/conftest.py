@@ -17,6 +17,10 @@ from decimal import Decimal
 os.environ["PAYMENT_DECLINE_RATE"] = "0"
 os.environ["PAYMENT_DELAY_MIN_MS"] = "0"
 os.environ["PAYMENT_DELAY_MAX_MS"] = "0"
+# Tests never send telemetry, whatever shoplite/api/.env says, and start with
+# every feature flag off (tests that need a flag switch it on themselves).
+os.environ["APPLICATIONINSIGHTS_CONNECTION_STRING"] = ""
+os.environ["FEATURE_FLAGS"] = ""
 
 import pytest  # noqa: E402  (imports after the environment is set, on purpose)
 from fastapi.testclient import TestClient  # noqa: E402

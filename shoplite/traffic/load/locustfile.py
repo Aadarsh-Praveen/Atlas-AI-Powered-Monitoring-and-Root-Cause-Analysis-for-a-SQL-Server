@@ -24,7 +24,9 @@ Run (see README.md):
 
 import os
 import random
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 from locust import HttpUser, between, task
 
@@ -33,7 +35,14 @@ from locust import HttpUser, between, task
 if os.environ.get("LOAD_SHAPE", "on").strip().lower() != "off":
     from shape import DailyCurveShape  # noqa: F401  (Locust finds it by its base class)
 
-ADMIN_TOKEN = os.environ.get("SHOPLITE_ADMIN_TOKEN", "").strip()
+# Layered settings (tools/envconfig.py): real environment > load/.env (if
+# present) > the root .env. In GitHub Actions only the workflow's environment.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+from envconfig import load_layers, setting  # noqa: E402
+load_layers(Path(__file__).resolve().parent)
+
+# SHOPLITE_ADMIN_TOKEN (GitHub secret), else the root .env's ADMIN_TOKEN (local).
+ADMIN_TOKEN = setting("SHOPLITE_ADMIN_TOKEN", "ADMIN_TOKEN") or ""
 
 SEARCH_TERMS = (
     "drill", "hammer", "screws", "wrench", "pliers", "paint", "primer", "faucet", "valve",

@@ -1,0 +1,15 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "JobName": "example",
+    "Category": "example",
+    "Outcome": "example",
+    "StartedAt": "2026-11-22T15:00:00.000000Z",
+    "DurationSeconds": 1,
+    "Message": "example",
+    "FailedStepName": "example",
+    "FailedStepMessage": "example",
+    "HistoryId": 1
+  }
+]

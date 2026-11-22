@@ -2,9 +2,10 @@
 
 How ShopLite runs in production, how to operate it day to day, and what to check when something looks
 wrong. Written in Phase 2, extended in Phase 4 (jobs, backups and restores, the vendor feed, ReportingDB,
-Extended Events); the first document in `knowledge/`. Atlas reads it from Phase 7 onward.
+Extended Events) and Phase 5 (monitoring, alerts, the collector, dashboards, game days); the first
+document in `knowledge/`. Atlas reads it from Phase 7 onward.
 
-**Last verified against the real setup:** _(fill in the date after Phase 2, Part C6)_ · Phase 4 sections (13–17): _(fill in after Phase 4, Part C4)_
+**Last verified against the real setup:** _(fill in the date after Phase 2, Part C6)_ · Phase 4 sections (13–17): _(fill in after Phase 4, Part C4)_ · Phase 5 sections (18–22): _(fill in after Phase 5, Part C4)_
 
 ---
 
@@ -39,6 +40,10 @@ the vendor ETL, and the ReportingDB refreshes (sections 13–17).
 | SQL Server | VM, service `MSSQLSERVER` | SQL Server 2022 Developer. Accepts local connections only. Max server memory 5 GB. Databases: **`SalesDB`** (about 1,000,000 orders; **FULL** recovery since Phase 4, log backups every 15 minutes), **`ReportingDB`** (daily sales summaries rebuilt from SalesDB; SIMPLE), **`DBA`** (Ola Hallengren's maintenance procedures, `CommandLog`, restore test results; SIMPLE). Extended Events session `ShopLite_Diagnostics` (section 17). |
 | SQL Server Agent | VM, service `SQLSERVERAGENT` | Starts automatically with the VM. Runs every database job (section 13). Its account `NT SERVICE\SQLSERVERAGENT` runs the ETL and can read `C:\atlas\server\etl\.env`. |
 | Backup storage | Azure, `rg-shoplite-prod` | Storage account `stshoplite…` (Standard LRS), private container **`sqlbackups`**, lifecycle rule deleting backups after **14 days**. SQL Server writes to it with a SAS credential (section 14). Defined in `infra/modules/storage.bicep`. |
+| Monitoring collector (Phase 5) | VM, service `shoplite-collector` | Python, runs as `NT AUTHORITY\LocalService`, every minute: SQL Server internals and operations to Log Analytics and ADX, plus a heartbeat (section 21). Code in `C:\atlas\server\collector`; state and buffer in `F:\collector`. Not a SQL Agent job, and not dependent on SQL Server: it keeps reporting when SQL Server is down. |
+| Azure Monitor Agent (Phase 5) | VM, extension `AzureMonitorWindowsAgent` | Performance counters and Windows event logs (including SQL Server's entries in the Application log) to Log Analytics, per the rule `dcr-shoplite-vm` (section 19). |
+| Monitoring in Azure (Phase 5) | Azure, `rg-shoplite-prod` | Workspace `law-shoplite-prod`, Application Insights `appi-shoplite-prod`, endpoint `dce-shoplite-prod`, rules `dcr-shoplite-sql`/`-ops`/`-vm`, action group `ag-shoplite-email`, 19 alert rules, the suppression rule (sections 19–20). Created by hand from `observability/azure-setup.md`. |
+| History and dashboards (Phase 5) | ADX free cluster; Grafana Cloud (free) | ADX database `shoplite`: the collector's tables for 12 months. Grafana: five dashboards reading ADX and Log Analytics (section 22). Outside Azure's resource group. |
 | Vendor database | Neon (free managed Postgres), US East | "The vendor": an outside supplier network's Postgres, schema `supply`. ShopLite reads it with the read-only `shoplite_reader` login (TLS required); it changes every day through `vendor-day.yml`. Not in Azure, and not ShopLite's to change (section 15). |
 
 ## 2. Ports
@@ -67,9 +72,14 @@ Secret **values** are in the owner's password manager, never in Git or in this d
 | `vendor_activity` (vendor Postgres) | `vendor-day.yml` | Writes vendor data only; no delete, no structure changes. GitHub secret `VENDOR_ACTIVITY_URL`. The vendor admin connection never leaves the owner's Mac. |
 | Backup SAS (Phase 4) | SQL Server's backups and restores | Stored only inside SQL Server, as the credential named after the container URL. Permissions read, write, create, list (no delete), HTTPS only. **Expires: _(fill in YYYY-MM-DD when created)_, signed with key _(1 or 2)_.** Rotate before it expires (section 10). |
 | `reporting_reader` role | Nobody yet | Read-only on ReportingDB's reports. Grafana's and Atlas's logins join it later. |
+| `shoplite_monitor` (Phase 5) | The collector | Read-only: `VIEW SERVER PERFORMANCE STATE`, `VIEW DATABASE STATE` in SalesDB, ReportingDB, DBA, msdb, `SELECT` on msdb job and backup history and on the four operational tables. No business data, no writes. Password in `C:\atlas\server\collector\.env` (`SQL_PASSWORD`), identical to the value given to `server/collector/sql/001_monitor_login.sql`. |
+| prod-sql-01's managed identity (Phase 5) | The collector, to Log Analytics | System-assigned; **Monitoring Metrics Publisher** on `dcr-shoplite-sql` and `dcr-shoplite-ops` only. No secret anywhere. |
+| `shoplite-collector-adx` app registration (Phase 5) | The collector, to ADX | ADX **ingestor** on `shoplite` (and `shoplite_dev`). Secret in the collector's `.env` (`ADX_APP_SECRET`). **Secret expires: _(fill in)_.** |
+| `shoplite-grafana-reader` app registration (Phase 5) | Grafana Cloud | ADX **viewer** on `shoplite`, **Log Analytics Reader** on `law-shoplite-prod`, **Monitoring Reader** on `prod-sql-01`. Secret stored in Grafana's data sources. **Secret expires: _(fill in)_.** |
+| Application Insights connection string (Phase 5) | The API | `APPLICATIONINSIGHTS_CONNECTION_STRING` in the API `.env`. Lets anyone holding it send data into `appi-shoplite-prod`: treated as a secret. |
 
 The `.env` files on the VM are readable only by Administrators and SYSTEM, plus one service account
-each, read-only: LocalService for the API's, `NT SERVICE\SQLSERVERAGENT` for the ETL's.
+each, read-only: LocalService for the API's and the collector's, `NT SERVICE\SQLSERVERAGENT` for the ETL's.
 
 ## 4. Starting and stopping
 
@@ -121,7 +131,7 @@ curl -s https://shoplite-aadarsh.northcentralus.cloudapp.azure.com/health
 On the VM (PowerShell as Administrator):
 
 ```powershell
-Get-Service MSSQLSERVER, SQLSERVERAGENT, shoplite-api, caddy       # all four: Running
+Get-Service MSSQLSERVER, SQLSERVERAGENT, shoplite-api, caddy, shoplite-collector   # all five: Running
 Invoke-RestMethod http://127.0.0.1:8000/health                       # bypasses Caddy
 Get-Volume -DriveLetter C, F | Format-Table DriveLetter, SizeRemaining, Size
 ```
@@ -156,6 +166,9 @@ process that survived; see section 8.
 | Latest log backup | less than 20 minutes old (business hours) | Section 14, "Are the backups healthy?" |
 | Latest restore test | `succeeded`, less than 8 days old | Section 14 |
 | Backup SAS expiry (section 3) | more than 30 days away | the date in section 3 |
+| Collector heartbeat (Phase 5) | one row a minute; `QueriesFailed` 0; `BufferedRecords` 0 | Section 21 |
+| Alerts (Phase 5) | nothing **Fired** that you don't know about | Azure portal → Monitor → Alerts (section 20) |
+| App registration secrets (section 3) | more than 30 days away | the dates in section 3 |
 
 ## 6. Logs
 
@@ -171,6 +184,7 @@ All logs are on the data disk and rotate, so they can't fill it.
 | ETL (Phase 4) | `F:\Logs\jobs\etl.log` | The last ETL run's full output (overwritten each run). Every run's summary is in `SalesDB.ops.etl_runs`. |
 | SQL Agent jobs | `msdb` job history (section 13) | Each job's outcome and each step's message. Kept 30 days. |
 | Maintenance commands | `DBA.dbo.CommandLog` | Every backup, index operation, and CHECKDB: start, end, errors. Kept 30 days. |
+| Collector (Phase 5) | `F:\Logs\collector\shoplite-collector.out.log` | One line per cycle (rows, failed collections by name), each failure's full message, send failures with their retry delay. Rolled at 10 MB, 10 kept. |
 | Extended Events | `F:\XE\ShopLite_Diagnostics_*.xel` | Deadlocks, blocking over 10 s, requests over 2 s, errors of severity 16+ (section 17). Rolling: 10 files × 50 MB. |
 
 Every API response carries an `X-Request-ID` header; the same ID is in the API log line, which links
@@ -341,6 +355,19 @@ their history.
 edits (`USE [DBA]`, `@CreateJobs = 'N'`), run it, and note the new version here.
 Installed version: _(fill in after installing)_.
 
+**Rotate the collector's ADX secret (before it expires; Phase 5):** Entra ID → App registrations →
+`shoplite-collector-adx` → Certificates & secrets → New client secret (12 months) → put its Value in
+`C:\atlas\server\collector\.env` (`ADX_APP_SECRET`) → `Restart-Service shoplite-collector` → check the
+heartbeat's `AdxOk` → delete the old secret. Update the expiry in section 3.
+
+**Rotate Grafana's secret:** the same for `shoplite-grafana-reader`, then paste the new Value into both
+Grafana data sources (`ADX shoplite`, `Azure Monitor shoplite`) → Save & test.
+
+**Change a collected table, an alert, or a dashboard (Phase 5):** tables: `observability/schema.yml`
+first, then the collector, `make_table_files.py`, the ADX script, and the Log Analytics table (add the
+column in the portal). Alerts: the rule's file in `observability/alerts/` and the rule in the portal, in
+the same sitting. Dashboards: `observability/tools/make_dashboards.py`, regenerate, re-import.
+
 ## 11. Rules for production
 
 - **Never run the API smoke tests against production.** They create orders and buy up stock.
@@ -360,6 +387,10 @@ Installed version: _(fill in after installing)_.
   it. `COPY_ONLY` touches neither.
 - **Never run `server/etl/sql/900_cutover_placeholders.sql` again.** It was a one-time step and
   refuses after the first successful ETL run anyway.
+- **Never point a local collector at the production ADX database** (`shoplite`): local tests use
+  `shoplite_dev` (Phase 5).
+- **Problems are caused on purpose only through the incident injector, on a game day** (section 18):
+  never by hand.
 
 ## 12. Simulated traffic (Phase 3)
 
@@ -696,3 +727,164 @@ ORDER BY timestamp_utc DESC;
 Is it running? `SELECT name FROM sys.dm_xe_sessions WHERE name = 'ShopLite_Diagnostics';` returns a
 row. If not, `ALTER EVENT SESSION ShopLite_Diagnostics ON SERVER STATE = START;`, and check that
 `F:\XE` exists and `NT SERVICE\MSSQLSERVER` can write to it (`server\jobs\01-prepare-server.ps1`).
+
+## 18. Game days (Phase 5)
+
+A game day causes problems in production **on purpose**, one at a time, to check that monitoring
+notices them and that the response works. The incidents, their tooling, and their safety rules are
+described in `incidents/README.md` (outside `knowledge/` on purpose: this runbook doesn't list them,
+and records no answers).
+
+### Before
+
+- [ ] A weekday, **between 13:30 and 22:30 UTC** (the injector refuses outside that window).
+- [ ] `TRAFFIC_ENABLED` is `true` and shoppers are active (the Overview dashboard shows requests).
+- [ ] Everything is healthy beforehand: no alert firing, collector heartbeat current, no failed jobs
+      today (sections 5 and 13).
+- [ ] `python incidents/injector.py status` reports nothing active and nothing left over.
+- [ ] Open the Grafana Overview dashboard and your email.
+
+### During
+
+- **One incident at a time.** Always a `--dry-run` first, then the real run.
+- Note the **start time**, then the time each **alert email** arrives, and what the dashboards show.
+- Don't fix the problem by hand while it's running: the injector reverts it at its deadline, or press
+  **Ctrl+C** to revert early. (Practising the fix belongs to later phases, with Atlas.)
+- If anything unexpected happens (real customers affected beyond the plan, data looking wrong), press
+  Ctrl+C at once, run `revert`, and investigate.
+
+### After each incident
+
+- [ ] The injector printed "Reverted"; `status` shows nothing left over.
+- [ ] Every alert that fired has **resolved** (stateful alerts send a "Resolved" email).
+- [ ] The ground truth has a `-start.json` and an `-end.json` for it in the ground-truth container.
+- [ ] Record the result in **`incidents/game-days.md`**, not here: a log of what was injected when is
+      part of the answer key, so it stays outside `knowledge/`.
+
+### After a crash or VM shutdown mid-incident
+
+Run `python incidents/injector.py status` (on the VM, and on the Mac for vendor-side incidents), then
+`revert` for anything it reports. Persistent changes stay until reverted; session-based ones end with
+their session.
+
+## 19. Monitoring: how it fits together (Phase 5)
+
+```
+                          every minute
+ SQL Server ──▶ collector (shoplite-collector) ──┬──▶ Log Analytics  law-shoplite-prod (31 days) ──▶ alert rules ──▶ email
+ VM ──────────▶ Azure Monitor Agent ─────────────┤                                                    (section 20)
+ API ─────────▶ Application Insights ────────────┘
+                                                 └──▶ ADX free cluster, database shoplite (12 months)
+                                                                │
+                              Grafana Cloud ◀───────────────────┴── also Log Analytics  (section 22)
+```
+
+| Store | Holds | For |
+|---|---|---|
+| **Log Analytics** `law-shoplite-prod` | The collector's 16 `_CL` tables, the agent's `Perf`, `Event`, `Heartbeat`, Application Insights' `AppRequests`, `AppDependencies`, `AppExceptions`. **31 days.** | Alerts, "right now" questions |
+| **ADX** database `shoplite` | The collector's 16 tables (same names and columns) and 5 hourly rollups. **12 months.** No SLA: never used for alerts. | History, trends, later forecasts |
+| **Grafana Cloud** | Nothing (it only queries the two above) | Dashboards |
+
+**The collector's tables** are defined in `observability/schema.yml` (columns, types, frequency): waits,
+performance counters, sessions, blocking chains, Extended Events, database sizes and backup ages, file
+I/O, top queries from Query Store (with forced-plan flag), job runs, backups, ETL runs, ReportingDB
+refreshes, restore tests, maintenance commands, the vendor's freshness, and the collector's heartbeat.
+Delivery is at least once: event tables have a `unique_id` column; de-duplicate with
+`summarize arg_max(TimeGenerated, *) by <unique_id>`.
+
+**Sessions aren't filtered:** the collector reports every SQL Server session as it is. Its own sessions
+are `ShopLite-Collector`; the API's are `ShopLite-API/<version>`; the ETL's `ShopLite-ETL`.
+
+**Costs** (record the real figures after the first month):
+
+| Item | Expected | Real |
+|---|---|---|
+| Log Analytics ingestion | about 0.5 GB a month (5 GB free); daily cap 0.5 GB/day as a runaway guard | _(fill in from the Usage query)_ |
+| Alert rules | about $10 a month (2 rules at 5 minutes, 13 at 15, 2 hourly; metric rules and the ping test free) | _(fill in)_ |
+| ADX, Grafana Cloud | free tiers | |
+
+```kusto
+// Ingestion by table, last 30 days (workspace -> Logs)
+Usage | where TimeGenerated > ago(30d) | summarize GB = round(sum(Quantity) / 1024, 3) by DataType | order by GB desc
+```
+
+**If the daily cap is hit**, Log Analytics accepts no data until the daily reset, and every other alert
+goes blind; the always-on alert `shoplite-always-daily-cap` emails at once (section 20). Find the table
+that grew with the Usage query before raising the cap.
+
+## 20. Alerts (Phase 5)
+
+Azure Monitor sends every alert email; the rules are simple thresholds that work even if Atlas is
+down. Definitions (query, threshold, frequency, severity): `observability/alerts/`, one file per rule.
+
+**Who's told:** action group `ag-shoplite-email` (email, common alert schema). **When:** the alert
+processing rule `apr-shoplite-outside-business-hours` suppresses **severity 2–4** emails daily
+22:55–13:30 UTC and all weekend (the VM is off on purpose). **Severity 1** rules are never suppressed.
+Rules are stateful: one email when a problem starts, one ("Resolved") when it ends.
+
+| Rule (`shoplite-…`) | Sev | Means | First checks |
+|---|---|---|---|
+| `sql-blocking` | 2 | A session waited over 30 s for a lock | `SqlBlocking_CL` head blocker: program, login, status (sleeping + open transaction?), statement; XE blocked-process reports |
+| `sql-deadlocks` | 2 | SQL Server killed a session to break a deadlock | `SqlXEvents_CL` `xml_deadlock_report` graph: both statements, objects, lock order |
+| `sql-log-backup-age` | 2 | SalesDB's newest log backup is over 30 minutes old | LOG job runs, `DbaCommandLog_CL` errors (SAS expired?), collector heartbeat |
+| `sql-full-backup-missing` | 2 | No full backup since the last business evening | FULL job runs and `BACKUP_DATABASE` rows; was the VM up at 21:30? |
+| `sql-job-failed` | 2 | A SQL Agent job run failed | The alert's `FailedStepName` and `FailedStepMessage`; the job's own alert (ETL, refresh) if any |
+| `sql-restore-test-failed` | 2 | The weekly restore test failed | `DbaRestoreTests_CL.ErrorMessage` (broken log chain? CHECKDB errors?) and section 14 |
+| `sql-restore-test-missed` | 2 | Thursday, and no successful restore test since Wednesday | Did the restore test job run? `DBA.dbo.restore_test_runs` |
+| `sql-log-full` | 2 | A transaction log is over 70% used | `LogReuseWait`: LOG_BACKUP (backups late) or ACTIVE_TRANSACTION (an old open transaction) |
+| `ops-etl-failed` | 2 | Today's vendor feed wasn't loaded | `ErrorStage` and `ErrorMessage` (section 15's table) |
+| `ops-vendor-feed-stale` | 3 | The vendor's prices are over 36 hours old, or the vendor was unreachable for an hour | `VendorFeed_CL.Error`; did vendor-day.yml run? `VENDOR_ACTIVITY_ENABLED`? |
+| `ops-refresh-failed` | 3 | A ReportingDB refresh failed | `OpsRefreshRuns_CL.ErrorMessage` (section 16) |
+| `vm-cpu-credits` | 2 | Under 30 CPU credits: throttling is close | VM CPU over the day; busiest queries (`SqlTopQueries_CL`), process CPU, traffic |
+| `vm-data-disk` | 2 | `F:` under 20% free | Largest folders on `F:` (SQL files, the collector's buffer, XE, logs) |
+| `api-error-rate` | 2 | Over 5% of API requests failed with 5xx (15 min, at least 30 requests) | Failures by endpoint and code; `AppExceptions`; `AppDependencies`; `/health` |
+| `api-latency` | 2 | API p95 over 1.5 s (15 min) | p95 by endpoint; slow dependencies (SQL? another service?); then SQL Server: plans, waits, blocking |
+| `api-health` | 2 | `/health` fails from 3 of 5 outside locations | `/health` yourself (section 5): 503 SQL, 502 API, timeout VM or Caddy |
+| `monitoring-collector-heartbeat` | 2 | No collector heartbeat for 5 minutes: the other SQL alerts are blind | `shoplite-collector` service and its log (section 21); the agent's `Heartbeat` (is the VM up?) |
+| `always-vm-running-off-hours` | **1** | The VM runs outside business hours (costs money) | Did vm-schedule's 23:00 run fail? Deallocate (section 4) |
+| `always-daily-cap` | **1** | Log Analytics hit its daily cap: every other alert is blind | The Usage query (section 19): which table grew, and why |
+
+**Testing the chain end to end:** `observability/test-alert.md` (stop the collector for 10 minutes in
+business hours; expect "Fired" then "Resolved"). Recorded result: _(fill in: delay to Fired, to Resolved)_.
+
+## 21. The collector (Phase 5)
+
+`server/collector/` (README there). A Windows service, `shoplite-collector` (WinSW, LocalService,
+starts automatically, restarts on crash, **no dependency on SQL Server**), running `main.py` every
+minute: collect → store in the buffer (`F:\collector\buffer`) → commit watermarks → send → heartbeat.
+
+```kusto
+// Is it healthy? (Log Analytics)
+CollectorHeartbeat_CL
+| top 10 by TimeGenerated desc
+| project TimeGenerated, CycleSeconds, QueriesRun, QueriesFailed, FailedCollections, LastError,
+          SqlOk, LogAnalyticsOk, AdxOk, BufferedRecords
+```
+
+| You see | Meaning |
+|---|---|
+| A row every minute, `QueriesFailed` 0, `BufferedRecords` 0, all `…Ok` true | Healthy |
+| `SqlOk` false | SQL Server unreachable, or `shoplite_monitor`'s password doesn't match (`LastError`) |
+| `FailedCollections` lists names (e.g. `top_queries`) | Those queries failed; the log has each full message |
+| `LogAnalyticsOk` / `AdxOk` false, `BufferedRecords` growing | A destination refuses or is unreachable; records wait on `F:` (Log Analytics' buffer keeps 47 hours, ADX's 7 days) |
+| No rows at all | Service stopped, or every send fails: `Get-Service shoplite-collector`, its log |
+
+**Restart:** `Restart-Service shoplite-collector`. **After a code update:** `git pull`, then the same.
+**After changing its service file:** stop, uninstall, copy, install (server/collector/README.md).
+
+## 22. Dashboards (Phase 5)
+
+Grafana Cloud: **_(fill in the stack URL, https://<stack>.grafana.net)_**, folder **ShopLite**. Read-only
+identity; it stores nothing. Defined as code in `observability/tools/make_dashboards.py`; the JSON in
+`observability/grafana/` is generated from it (README there: import, variables, troubleshooting).
+
+| Dashboard | Open it to answer |
+|---|---|
+| **ShopLite: Overview** | Is everything healthy right now? (heartbeat, API traffic, errors, p95, blocking, log backup age, CPU credits) |
+| **ShopLite: SQL Server** | What is SQL Server doing? (waits, workload, sessions, blocking and head blockers, deadlocks, top queries with plans and forced plans, logs, file latency) |
+| **ShopLite: Operations** | Did the routine work? (jobs, backups, restore tests and RTO, ETL, vendor freshness, refreshes, maintenance) |
+| **ShopLite: API** | How does the API behave? (traffic by source, latency, errors, endpoints, dependencies, exceptions) |
+| **ShopLite: VM** | How is the machine? (CPU credits, CPU, memory, disk, the collector's own health, Windows and SQL Server events) |
+
+All times are UTC; nights and weekends are empty on purpose. ADX panels lag about 5 minutes (the
+Overview's "now" figures come from Log Analytics for that reason).

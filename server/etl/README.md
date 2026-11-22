@@ -66,9 +66,10 @@ before the failure could be written).
 ## Passwords
 
 One new password for `shoplite_etl` (SQL Server's policy: 8+ characters, three of upper, lower,
-digits, symbols; use only `- _ . ~` as symbols). It goes to two places: the `002` script (once, at run
-time) and `server/etl/.env` as `SALESDB_PASSWORD`. The ETL also needs the `shoplite_reader` password
-you chose in `vendor/README.md`, inside `VENDOR_READER_URL`.
+digits, symbols). It goes to the `002` script (once, at run time) and to settings: **locally the root
+`.env`'s `SHOPLITE_ETL_PASSWORD`** (no ETL `.env` needed: the ETL also builds its vendor URL from the
+root's `SHOPLITE_READER_PASSWORD`, `VENDOR_HOST`, `VENDOR_PORT`, `POSTGRES_DB`, encoded); **on the VM**
+`server\etl\.env`'s `SALESDB_PASSWORD` and the Neon `VENDOR_READER_URL`.
 
 ```bash
 read -rs SHOPLITE_ETL_PASSWORD && export SHOPLITE_ETL_PASSWORD     # type, press Enter
@@ -85,7 +86,8 @@ Needs: Docker running, vendor-pg set up and seeded (`vendor/README.md`), SalesDB
 ```bash
 python3 -m venv server/etl/.venv
 server/etl/.venv/bin/pip install -r server/etl/requirements.txt "pytest>=8.3,<9"
-cp server/etl/.env.example server/etl/.env      # then edit: the two passwords
+# Settings: nothing to copy. The root .env needs SHOPLITE_ETL_PASSWORD and SHOPLITE_READER_PASSWORD;
+# everything else has a local default. (A server/etl/.env is only for overriding one value.)
 ```
 
 (`pytest` only on your Mac; the VM doesn't need it.)
@@ -162,6 +164,8 @@ server\etl\.venv\Scripts\pip install -r server\etl\requirements.txt
 Copy-Item server\etl\.env.example server\etl\.env
 notepad server\etl\.env
 ```
+
+**Already have this file from before (it predates layered settings)?** Add the line `LOAD_ROOT_ENV=false` to it, so the root `.env` is never read even when you run this by hand as Administrator.
 
 Lock it down like the root `.env`: only administrators, SYSTEM, and the **SQL Agent service account**
 (the job runs the ETL as that account) can read it:

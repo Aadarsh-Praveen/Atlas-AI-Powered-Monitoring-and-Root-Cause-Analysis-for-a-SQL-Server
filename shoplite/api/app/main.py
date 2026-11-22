@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
-from app import flags
+from app import flags, telemetry
 from app.config import get_settings
 from app.db import QUERY_TIMEOUT_SQLSTATE, describe_sql_error, dispose_engine, is_database_unavailable
 from app.middleware import (REQUEST_ID_HEADER, SYNTHETIC_HEADER, VERSION_HEADER, configure_logging,
@@ -26,6 +26,11 @@ from app.routers import account, admin, cart, catalog, checkout, health, orders
 settings = get_settings()
 configure_logging(settings.log_level)
 logger = logging.getLogger("shoplite.app")
+
+# Application Insights (Phase 5): must be set up before FastAPI(...) below,
+# because the OpenTelemetry distro instruments FastAPI apps as they're created.
+# Off when no connection string is configured (local runs, tests).
+telemetry.configure(settings)
 
 
 @asynccontextmanager
@@ -87,6 +92,7 @@ async def database_error(_request: Request, error: DBAPIError):
 
     logger.error("Database error %s (SQLSTATE %s): %s", details.number, details.sqlstate,
                  details.message, exc_info=error)
+    telemetry.record_exception(error)       # -> AppExceptions (it's a 500, not a crash)
     return JSONResponse(status_code=500, content={
         "detail": f"Unexpected database error. Reference: {current_request_id()}"})
 

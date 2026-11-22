@@ -7,3 +7,4 @@
 # --with-deps to also install the system libraries Chromium needs.
 
 playwright>=1.48,<2
+python-dotenv>=1.0,<2     # reads .env files (tools/envconfig.py); unused when no .env exists (GitHub Actions)

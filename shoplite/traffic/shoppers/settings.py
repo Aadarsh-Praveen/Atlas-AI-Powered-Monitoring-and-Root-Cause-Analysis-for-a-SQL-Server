@@ -27,8 +27,15 @@ force a single persona for testing.
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Layered settings (tools/envconfig.py): real environment > shoppers/.env (if
+# present) > the root .env. In GitHub Actions there are no .env files, so only
+# the workflow's environment counts.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+from envconfig import load_layers, setting  # noqa: E402
 
 PERSONAS = ("browser", "searcher", "buyer", "loyal", "admin")
 
@@ -138,13 +145,15 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    load_layers(Path(__file__).resolve().parent)
     think_min = _float("SHOPPERS_THINK_MIN_SECONDS", 1.0, 0.0, 60.0)
     think_max = _float("SHOPPERS_THINK_MAX_SECONDS", 6.0, 0.0, 120.0)
     if think_max < think_min:
         raise SettingsError("SHOPPERS_THINK_MAX_SECONDS must be at least SHOPPERS_THINK_MIN_SECONDS")
 
     weights = parse_weights(_text("SHOPPERS_WEIGHTS", DEFAULT_WEIGHTS))
-    admin_token = os.environ.get("SHOPLITE_ADMIN_TOKEN", "").strip()
+    # SHOPLITE_ADMIN_TOKEN (GitHub secret), else the root .env's ADMIN_TOKEN (local).
+    admin_token = setting("SHOPLITE_ADMIN_TOKEN", "ADMIN_TOKEN") or ""
     if not admin_token:
         weights["admin"] = 0       # no token, no admin sessions (they'd only fail)
         if not any(weights.values()):

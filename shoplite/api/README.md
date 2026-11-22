@@ -15,14 +15,11 @@ Azure VM as a Windows service in Phase 2.
 Prerequisites: the Phase 0 containers are healthy, and SalesDB has been built and seeded
 (`shoplite/db/README.md`). Commands run from the repo root with the root `.venv` active.
 
-1. Create the API's settings file and fill in the values:
-
-   ```bash
-   cp shoplite/api/.env.example shoplite/api/.env
-   ```
-
-   Use the `shoplite_app` password (`SHOPLITE_APP_PASSWORD` from the root `.env`), choose an admin
-   token, and keep `http://localhost:3000` as the allowed origin.
+1. Settings: **nothing to copy.** The API reads the root `.env` (layered settings,
+   `tools/envconfig.py`): `SHOPLITE_APP_PASSWORD` is its database password (`DB_PASSWORD`),
+   `ADMIN_TOKEN` its admin token, and `SQL_TRUST_SERVER_CERTIFICATE=true` trusts the local
+   container's certificate. Everything else has a local default (`http://localhost:3000` as the
+   allowed origin). Create `shoplite/api/.env` from its `.env.example` only to override one value.
 
 2. Install the requirements:
 
@@ -89,6 +86,30 @@ can be found in `sys.dm_exec_sessions`.
 - `POST /api/admin/restock` keeps simulated shopping from emptying the shelves.
 - Deploy with `deploy.ps1 -Version 1.1.0`; no database changes.
 
+### What's new in 1.2.0 (Phase 5)
+
+- **Application Insights** (`app/telemetry.py`), through the Azure Monitor OpenTelemetry distro: every
+  request (`AppRequests`), every SQL call as a dependency with its parameterized text (`AppDependencies`),
+  and errors (`AppExceptions`), linked by `OperationId`. Custom dimensions on each request:
+  `shoplite.synthetic_source` (the `X-Synthetic-Source` tag) and `shoplite.request_id`. **Off unless
+  `APPLICATIONINSIGHTS_CONNECTION_STRING` is set**, so local runs and tests send nothing.
+- **Sampling:** `TELEMETRY_SAMPLING_RATIO` (default 0.25) of requests are kept, each with all its SQL
+  calls; `ItemCount` on each row says how many requests it stands for, so count with
+  `sum(ItemCount)` (the alert rules do). The API's log lines aren't exported (they're already in files).
+- **Feature flag `search_ranking_v2`** (off by default): searches with the default sort come back in
+  relevance order (names starting with the search term first), scored by a **simulated ranking
+  service** (`app/ranking.py`) that takes `RANKING_SERVICE_DELAY_MS` (2500) and fails
+  `RANKING_SERVICE_ERROR_RATE` (0.5) of the time with `RankingServiceError` (a 500). It's the Phase 5
+  "API fault" incident: a buggy feature rollout, switched on and off by the incident injector. In
+  Application Insights the ranking call is a dependency (`POST /v2/rank` to `ranking-service`).
+- **New packages:** `pip install -r requirements.txt` before starting 1.2.0 (locally too); `deploy.ps1`
+  installs them on the VM.
+- **New settings** (`.env.example`, `deploy/.env.production.example`):
+  `APPLICATIONINSIGHTS_CONNECTION_STRING`, `TELEMETRY_SAMPLING_RATIO`, `RANKING_SERVICE_DELAY_MS`,
+  `RANKING_SERVICE_ERROR_RATE`. On the VM, **add them to the existing `shoplite\api\.env`** (don't
+  replace the file: it holds the production passwords), then deploy with `deploy.ps1 -Version 1.2.0`.
+  No database changes.
+
 ### Checkout in three steps
 
 1. One short transaction locks the cart's inventory rows, checks stock, creates the order and its
@@ -118,6 +139,9 @@ Errors return JSON `{"detail": "..."}` with the request ID in the `X-Request-ID`
 
 Smoke tests run against the local SalesDB (seeded) and change data like a real shopper would. The
 restock test restocks exactly one low-stock product per run. **Never run them against production.**
+`test_telemetry_and_ranking.py` covers 1.2.0: telemetry stays off in tests (the conftest forces an
+empty connection string), the custom dimensions and exception recording on a real OpenTelemetry span
+(kept in memory), and the ranking flag (order, errors, delay, and the search endpoint's 500).
 
 ```bash
 cd shoplite/api
@@ -128,14 +152,16 @@ python -m pytest
 
 ```
 shoplite/api/
-├── .env.example         settings template (copy to .env)
+├── .env.example         optional local overrides (production: deploy/.env.production.example)
 ├── requirements.txt
 ├── app/
 │   ├── main.py          creates the app: CORS, middleware, routers
 │   ├── config.py        settings from the environment, validated
 │   ├── db.py            engine, connection pool, timeouts, session tag, SQL error helpers
-│   ├── flags.py         feature flags (all off in Phase 1)
-│   ├── middleware.py    request IDs, version header, request logging
+│   ├── flags.py         feature flags (search_ranking_v2; all off by default)
+│   ├── middleware.py    request IDs, version header, request logging, telemetry tags
+│   ├── ranking.py       search ranking v2 and its simulated ranking service (Phase 5)
+│   ├── telemetry.py     Application Insights via OpenTelemetry (Phase 5)
 │   ├── schemas.py       request and response models
 │   └── routers/         one file per area: health, catalog, account, cart, checkout, orders, admin
 └── tests/               smoke tests (pytest)

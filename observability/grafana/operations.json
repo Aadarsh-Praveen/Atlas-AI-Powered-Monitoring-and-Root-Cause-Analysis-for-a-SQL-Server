@@ -1,0 +1,455 @@
+{
+  "uid": "shoplite-operations",
+  "title": "ShopLite: Operations",
+  "description": "Jobs, backups, restore tests, the vendor ETL, ReportingDB, maintenance, and the vendor (ADX history).",
+  "tags": [
+    "shoplite",
+    "phase5"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "5m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "adx",
+        "label": "History (ADX)",
+        "type": "datasource",
+        "query": "grafana-azure-data-explorer-datasource",
+        "hide": 0
+      },
+      {
+        "name": "azmon",
+        "label": "Now (Azure Monitor)",
+        "type": "datasource",
+        "query": "grafana-azure-monitor-datasource",
+        "hide": 0
+      },
+      {
+        "name": "workspace",
+        "label": "Log Analytics workspace resource ID",
+        "type": "textbox",
+        "hide": 0,
+        "query": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod",
+        "current": {
+          "text": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod",
+          "value": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod"
+        }
+      },
+      {
+        "name": "subscription",
+        "label": "Subscription ID",
+        "type": "textbox",
+        "hide": 0,
+        "query": "<subscription-id>",
+        "current": {
+          "text": "<subscription-id>",
+          "value": "<subscription-id>"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Job runs per day by outcome",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "SqlAgentJobRuns_CL | where $__timeFilter(TimeGenerated)\n            | summarize arg_max(TimeGenerated, *) by HistoryId\n            | summarize Runs = count() by TimeGenerated = startofday(TimeGenerated), Outcome\n            | order by TimeGenerated asc",
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Minutes since SalesDB's last backups",
+      "description": "The log backup line should saw-tooth under 15-20 minutes during business hours.",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "SqlDatabases_CL | where $__timeFilter(TimeGenerated) and DatabaseName == \"SalesDB\"\n            | summarize Log = max(datetime_diff('minute', TimeGenerated, LastLogBackupAt)),\n                        Full = max(datetime_diff('minute', TimeGenerated, LastFullBackupAt)) / 60.0\n                by bin(TimeGenerated, $__timeInterval)\n            | project TimeGenerated, ['Log backup (minutes)'] = Log, ['Full backup (hours)'] = Full\n            | order by TimeGenerated asc",
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Job runs (newest first)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "SqlAgentJobRuns_CL | where $__timeFilter(TimeGenerated)\n            | summarize arg_max(TimeGenerated, *) by HistoryId\n            | project TimeGenerated, JobName, Outcome, DurationSeconds, FailedStepName, FailedStepMessage\n            | order by TimeGenerated desc | take 100",
+          "resultFormat": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 10
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Backup size written (MB) by type",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "SqlBackups_CL | where $__timeFilter(TimeGenerated) and DatabaseName == \"SalesDB\" and not(IsCopyOnly)\n            | summarize arg_max(TimeGenerated, *) by BackupSetId\n            | summarize CompressedMB = sum(CompressedMB) by bin(TimeGenerated, 1h), BackupType\n            | order by TimeGenerated asc",
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decmbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Restore tests",
+      "description": "RestoreSeconds is the measured recovery time (RTO).",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "DbaRestoreTests_CL | where $__timeFilter(TimeGenerated)\n            | summarize arg_max(TimeGenerated, *) by RunId\n            | project TimeGenerated, Status, RestoreSeconds, CheckdbSeconds, LogBackupsRestored, RestoredTo, ErrorMessage\n            | order by TimeGenerated desc",
+          "resultFormat": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Vendor ETL runs",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "OpsEtlRuns_CL | where $__timeFilter(TimeGenerated)\n            | summarize arg_max(TimeGenerated, *) by RunId\n            | project TimeGenerated, Status, DurationSeconds, RowsRead, RowsInserted, RowsUpdated,\n                      RowsDiscontinued, RowsSkipped, ErrorStage, ErrorMessage\n            | order by TimeGenerated desc",
+          "resultFormat": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Vendor: freshness (hours) and connect time (ms)",
+      "description": "The data contract allows 36 hours. ConnectMs spikes when Neon's free tier wakes up.",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "VendorFeed_CL | where $__timeFilter(TimeGenerated)\n            | summarize FreshnessHours = max(FreshnessHours), ConnectMs = max(ConnectMs)\n                by bin(TimeGenerated, $__timeInterval)\n            | order by TimeGenerated asc",
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "ReportingDB refreshes",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "OpsRefreshRuns_CL | where $__timeFilter(TimeGenerated)\n            | summarize arg_max(TimeGenerated, *) by RunId\n            | project TimeGenerated, Mode, Status, DurationSeconds, DaysRebuilt, RowsWritten, ErrorMessage\n            | order by TimeGenerated desc",
+          "resultFormat": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Maintenance time per day by command (minutes)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${adx}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${adx}"
+          },
+          "database": "shoplite",
+          "queryType": "KQL",
+          "rawMode": true,
+          "query": "DbaCommandLog_CL | where $__timeFilter(TimeGenerated)\n            | summarize arg_max(TimeGenerated, *) by CommandLogId\n            | summarize Minutes = round(sum(DurationSeconds) / 60, 1) by TimeGenerated = startofday(TimeGenerated), CommandType\n            | order by TimeGenerated asc",
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 8
+      }
+    }
+  ]
+}

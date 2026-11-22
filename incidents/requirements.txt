@@ -1,0 +1,11 @@
+# Packages for the incident injector (incidents/). Its own virtual environment,
+# incidents/.venv, on the Mac and on the VM:
+#   python -m venv incidents/.venv
+#   incidents/.venv/bin/pip install -r incidents/requirements.txt          (Mac)
+#   incidents\.venv\Scripts\pip install -r incidents\requirements.txt     (VM)
+# The ground truth is uploaded with Python's own urllib: no Azure SDK needed.
+
+pyodbc>=5.2,<6            # SQL Server incidents
+python-dotenv>=1.0,<2     # incidents/.env, and the API's .env (shoplite_app's password, feature flags)
+psycopg[binary]>=3.2,<4   # vendor incidents (Postgres)
+requests>=2.32,<3         # the CPU-credits incident's extra load on the API

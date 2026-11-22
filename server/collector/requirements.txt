@@ -1,0 +1,16 @@
+# Packages for the monitoring collector (server/collector/). Its own virtual
+# environment, server/collector/.venv, like the ETL's:
+#   python -m venv server/collector/.venv
+#   server/collector/.venv/bin/pip install -r server/collector/requirements.txt          (Mac)
+#   server\collector\.venv\Scripts\pip install -r server\collector\requirements.txt     (VM)
+# Tests also need pytest (Mac only): pip install "pytest>=8.3,<9"
+
+pyodbc>=5.2,<6                    # SQL Server via ODBC Driver 18
+python-dotenv>=1.0,<2             # reads server/collector/.env
+PyYAML>=6.0,<7                    # reads observability/schema.yml (which DCR each table uses)
+psycopg[binary]>=3.2,<4           # the vendor check (Postgres, read-only)
+
+azure-identity>=1.17,<2           # the VM's managed identity, for Log Analytics
+azure-monitor-ingestion>=1.0.4,<2 # Logs Ingestion API client
+azure-kusto-data>=4.6,<6          # ADX connection and sign-in
+azure-kusto-ingest>=4.6,<6        # ADX queued ingestion (same major version as azure-kusto-data)

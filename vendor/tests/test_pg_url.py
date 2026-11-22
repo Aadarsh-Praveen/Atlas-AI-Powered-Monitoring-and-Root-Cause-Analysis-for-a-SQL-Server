@@ -8,8 +8,8 @@ Each test parses the URL with psycopg's conninfo_to_dict, which uses libpq,
 the same parser psycopg.connect uses. So "the parsed password equals the
 original" means the server would receive exactly that password.
 
-The tests never read the real .env: the scripts' load_dotenv is replaced
-with a no-op and the settings are set by the test itself.
+The tests never read a real .env: the scripts' layered loader (load_layers)
+is replaced with a no-op and the settings are set by the test itself.
 """
 
 import sys
@@ -58,9 +58,16 @@ def test_the_old_unencoded_url_was_broken():
     assert parsed.get("password") != "abc@123"
 
 
+def no_env_files(monkeypatch):
+    """The scripts read no .env files in these tests, and no stray settings leak in."""
+    monkeypatch.setattr(seed, "load_layers", lambda *args, **kwargs: [])
+    monkeypatch.setattr(activity, "load_layers", lambda *args, **kwargs: [])
+    for name in ("VENDOR_ADMIN_URL", "VENDOR_ACTIVITY_URL", "VENDOR_HOST", "VENDOR_PORT", "VENDOR_DB", "VENDOR_SSLMODE"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_seed_admin_url_encodes_the_root_env_password(monkeypatch):
-    monkeypatch.setattr(seed, "load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.delenv("VENDOR_ADMIN_URL", raising=False)
+    no_env_files(monkeypatch)
     monkeypatch.setenv("POSTGRES_USER", "vendor")
     monkeypatch.setenv("POSTGRES_PASSWORD", TRICKY_PASSWORD)
     monkeypatch.setenv("POSTGRES_DB", "vendordb")
@@ -69,9 +76,7 @@ def test_seed_admin_url_encodes_the_root_env_password(monkeypatch):
 
 
 def test_activity_url_encodes_the_role_password(monkeypatch):
-    # activity_url imports load_dotenv from dotenv when it runs.
-    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.delenv("VENDOR_ACTIVITY_URL", raising=False)
+    no_env_files(monkeypatch)
     monkeypatch.setenv("VENDOR_ACTIVITY_PASSWORD", TRICKY_PASSWORD)
     monkeypatch.setenv("POSTGRES_DB", "vendordb")
     parsed = conninfo_to_dict(activity.activity_url())
@@ -82,5 +87,6 @@ def test_activity_url_encodes_the_role_password(monkeypatch):
 def test_a_full_url_is_used_as_given(monkeypatch):
     # Neon's console gives an already-encoded URL; encoding it again would break it.
     given = "postgresql://neondb_owner:abc%40123@example.neon.tech/vendordb?sslmode=require"
+    no_env_files(monkeypatch)
     monkeypatch.setenv("VENDOR_ADMIN_URL", given)
     assert seed.admin_url() == given

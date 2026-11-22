@@ -10,6 +10,7 @@ import math
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
+from app import flags, ranking
 from app.db import get_engine
 from app.schemas import Category, ErrorResponse, Page, ProductDetail, ProductSort, ProductSummary
 
@@ -108,8 +109,14 @@ def list_products(
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY;
         """), {**params, "offset": (page - 1) * page_size, "limit": page_size}).all()
 
+    items = [to_summary(row) for row in rows]
+    # Search ranking v2 (feature flag, off by default): searches with the
+    # default sort come back in relevance order from the ranking service.
+    if q and q.strip() and sort == "name" and flags.is_enabled("search_ranking_v2"):
+        items = ranking.rerank(items, q.strip())
+
     return Page[ProductSummary](
-        items=[to_summary(row) for row in rows],
+        items=items,
         page=page,
         page_size=page_size,
         total_items=total,

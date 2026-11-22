@@ -1,0 +1,461 @@
+# observability/schema.yml
+#
+# Every table the monitoring collector (server/collector/) sends, defined
+# ONCE. The same table names and columns exist in two places:
+#   - Log Analytics: custom tables (the _CL suffix is Log Analytics' naming
+#     rule for custom tables), last 31 days, used by the alert rules.
+#   - ADX (the free Azure Data Explorer cluster): months of history, used by
+#     Grafana and, later, forecasting. Same names, _CL included, so one KQL
+#     query runs against either store unchanged.
+#
+# Who reads this file:
+#   - the collector's tests (B2) check every record it builds against it;
+#   - observability/adx/001_shoplite_database.kql creates these tables in ADX;
+#   - observability/azure-setup.md (B3) lists them for the portal: the custom
+#     tables and the data collection rules;
+#   - people and Atlas, to know what a column means.
+# Change a table here first, then the ADX script, the collector, and the
+# custom table in the portal, in the same commit.
+#
+# AMA (Windows events, the SQL error log, performance counters) and
+# Application Insights (the API) write Azure's own standard tables
+# (Event, Perf, AppRequests, ...). They aren't listed here: Azure defines them.
+
+version: 1.3.0
+
+conventions:
+  time: >
+    Every datetime is UTC (the VM and SQL Server run in UTC).
+  time_generated: >
+    TimeGenerated is required by Log Analytics on every row. For snapshot tables
+    (frequency "every N minutes") it's when the collector took the snapshot. For
+    event tables (incremental: job runs, backups, ETL runs, XE events, ...) it's
+    when the event happened (usually its finish time), so charts show events at
+    their real time.
+  computer: >
+    Computer is SQL Server's machine name (SERVERPROPERTY('MachineName')):
+    prod-sql-01 in production, the container's host name locally.
+  deltas: >
+    Columns marked "delta" are the change since the previous collection (SQL Server
+    counts these from its last restart). After a restart, or on the collector's
+    first cycle, no delta row is written for that cycle.
+  incremental: >
+    Event tables send each event once, tracked with a watermark the collector keeps
+    on disk. On the very first start it sends only the last 24 hours, so it doesn't
+    replay months of history.
+  truncation: >
+    Long text is cut to the length given in its description (Log Analytics limits
+    the size of a record). EventXml has its own "truncated" flag.
+  nulls: >
+    A value that doesn't apply (no backup yet, no error) is null, not 0 or "".
+  duplicates: >
+    Delivery is at least once: after a crash or a failed send, a batch can arrive
+    twice (never zero times). Every event table therefore has a unique_id column,
+    stable across re-sends; filter duplicates when querying, e.g.
+    SqlAgentJobRuns_CL | summarize arg_max(TimeGenerated, *) by HistoryId.
+    Snapshot tables need no ID: a duplicated snapshot repeats the same values at
+    the same TimeGenerated, which charts and alerts tolerate.
+  sessions: >
+    No session is filtered out or renamed: the collector reports every session as
+    SQL Server shows it. Its own sessions carry the program name ShopLite-Collector.
+
+# Column types, and how each is written in the two stores.
+types:
+  string:   {log_analytics: string,   adx: string}
+  int:      {log_analytics: int,      adx: int}
+  long:     {log_analytics: long,     adx: long}
+  real:     {log_analytics: real,     adx: real}
+  bool:     {log_analytics: boolean,  adx: bool}
+  datetime: {log_analytics: datetime, adx: datetime}
+
+# Log Analytics receives the tables through two data collection rules (DCRs),
+# grouped by kind, each well inside the per-rule limits. The stream for a
+# table is "Custom-<table name>". Created by hand from observability/azure-setup.md.
+data_collection_rules:
+  dcr-shoplite-sql: [CollectorHeartbeat_CL, SqlWaitStats_CL, SqlPerfCounters_CL, SqlSessions_CL,
+                     SqlBlocking_CL, SqlXEvents_CL, SqlDatabases_CL, SqlFileIo_CL, SqlTopQueries_CL]
+  dcr-shoplite-ops: [SqlAgentJobRuns_CL, SqlBackups_CL, OpsEtlRuns_CL, OpsRefreshRuns_CL,
+                     DbaRestoreTests_CL, DbaCommandLog_CL, VendorFeed_CL]
+
+# Rough volume while the VM runs (10 hours a weekday, about 22 days a month).
+# Log Analytics includes 5 GB a month free; the collector stays far below it.
+volume_estimate:
+  rows_per_business_day: 40000
+  average_row_bytes: 350
+  per_month: about 300 MB (collector); Application Insights and AMA add their own, also small
+
+# Columns every table has, listed again in each table for clarity.
+common_columns:
+  - {name: TimeGenerated, type: datetime, description: "See conventions.time_generated"}
+  - {name: Computer,      type: string,   description: "SQL Server's machine name"}
+
+tables:
+
+  # ===========================================================================
+  # The collector itself
+  # ===========================================================================
+  CollectorHeartbeat_CL:
+    description: >
+      One row per collection cycle. "No heartbeat for 5 minutes" is its own alert:
+      it means the collector, or the VM, stopped.
+    frequency: every 1 minute
+    kind: snapshot
+    rows_per_day: 600
+    columns:
+      - {name: TimeGenerated,    type: datetime, description: "When the cycle finished"}
+      - {name: Computer,         type: string,   description: "SQL Server's machine name"}
+      - {name: CollectorVersion, type: string,   description: "e.g. 1.0.0"}
+      - {name: CycleSeconds,     type: real,     description: "How long the cycle's queries took"}
+      - {name: QueriesRun,       type: int,      description: "Collection queries run this cycle"}
+      - {name: QueriesFailed,    type: int,      description: "Of those, how many had a failure (timeouts, permissions); a collection that failed for one database counts once"}
+      - {name: FailedCollections, type: string,  description: "Every failure this cycle by name, comma-separated, e.g. top_queries, databases[master]; null if none. Full messages are in the collector's log"}
+      - {name: LastError,        type: string,   description: "The last failure's message, up to 1000 characters; null if none"}
+      - {name: BufferedRecords,  type: long,     description: "Records waiting in the local buffer because a destination was unreachable"}
+      - {name: SqlOk,            type: bool,     description: "Connected to SQL Server this cycle"}
+      - {name: LogAnalyticsOk,   type: bool,     description: "Last send to Log Analytics succeeded"}
+      - {name: AdxOk,            type: bool,     description: "Last send to ADX succeeded"}
+
+  # ===========================================================================
+  # SQL Server internals: every minute
+  # ===========================================================================
+  SqlWaitStats_CL:
+    description: >
+      What SQL Server's threads waited on in the last minute (sys.dm_os_wait_stats),
+      the best starting point for "why is it slow?". Only waits that grew, and not
+      the harmless background waits (a fixed list in the collector).
+    frequency: every 1 minute
+    kind: snapshot (deltas)
+    rows_per_day: 12000
+    columns:
+      - {name: TimeGenerated,    type: datetime, description: "Snapshot time"}
+      - {name: Computer,         type: string,   description: "SQL Server's machine name"}
+      - {name: WaitType,         type: string,   description: "e.g. LCK_M_X (locks), PAGEIOLATCH_SH (disk reads), SOS_SCHEDULER_YIELD (CPU)"}
+      - {name: WaitTimeMs,       type: long,     description: "delta: total time spent waiting"}
+      - {name: SignalWaitTimeMs, type: long,     description: "delta: of that, time waiting for a CPU after the wait ended (high = CPU pressure)"}
+      - {name: WaitingTasks,     type: long,     description: "delta: number of waits"}
+      - {name: IntervalSeconds,  type: real,     description: "Seconds since the previous snapshot"}
+
+  SqlPerfCounters_CL:
+    description: >
+      Key performance counters (sys.dm_os_performance_counters), one row per counter.
+      Rate counters (".../sec") are converted to per-second values over the last
+      minute; the others are current values. The collector's list: Batch Requests/sec,
+      SQL Compilations/sec, SQL Re-Compilations/sec, User Connections, Processes
+      blocked, Lock Waits/sec, Number of Deadlocks/sec, Page life expectancy, Memory
+      Grants Pending, Total Server Memory (KB), Target Server Memory (KB),
+      Transactions/sec, Log Flushes/sec, Percent Log Used (per database).
+    frequency: every 1 minute
+    kind: snapshot
+    rows_per_day: 12000
+    columns:
+      - {name: TimeGenerated, type: datetime, description: "Snapshot time"}
+      - {name: Computer,      type: string,   description: "SQL Server's machine name"}
+      - {name: ObjectName,    type: string,   description: "Counter group without the instance prefix, e.g. General Statistics, Buffer Manager, Locks, Databases"}
+      - {name: CounterName,   type: string,   description: "e.g. Batch Requests/sec"}
+      - {name: InstanceName,  type: string,   description: "e.g. a database name or _Total; empty for counters without instances"}
+      - {name: Value,         type: real,     description: "Per second for rate counters, otherwise the current value"}
+
+  SqlSessions_CL:
+    description: >
+      User sessions right now (sys.dm_exec_sessions and requests), grouped by
+      database, program, login, and host: who is connected and how busy they are.
+    frequency: every 1 minute
+    kind: snapshot
+    rows_per_day: 6000
+    columns:
+      - {name: TimeGenerated,           type: datetime, description: "Snapshot time"}
+      - {name: Computer,                type: string,   description: "SQL Server's machine name"}
+      - {name: DatabaseName,            type: string,   description: "The session's current database"}
+      - {name: ProgramName,             type: string,   description: "The connection's program name, e.g. ShopLite-API/1.2.0, ShopLite-ETL"}
+      - {name: LoginName,               type: string,   description: "e.g. shoplite_app"}
+      - {name: HostName,                type: string,   description: "The client machine's name, as it reported it"}
+      - {name: Sessions,                type: int,      description: "Sessions in this group"}
+      - {name: RunningRequests,         type: int,      description: "Of those, how many are executing a request now"}
+      - {name: BlockedRequests,         type: int,      description: "Of those requests, how many are blocked by another session"}
+      - {name: OpenTransactionSessions, type: int,      description: "Sessions with an open transaction"}
+      - {name: LongestRequestSeconds,   type: real,     description: "The longest-running current request in the group; null if none"}
+
+  SqlBlocking_CL:
+    description: >
+      Rows only while something is blocked: every blocked session, plus the head
+      blocker at the top of each chain (the session holding the lock everyone waits
+      for, often idle with an open transaction).
+    frequency: every 1 minute
+    kind: snapshot (only when blocking exists)
+    rows_per_day: 0 normally; dozens per minute during a blocking incident
+    columns:
+      - {name: TimeGenerated,      type: datetime, description: "Snapshot time"}
+      - {name: Computer,           type: string,   description: "SQL Server's machine name"}
+      - {name: Role,               type: string,   description: "blocked or head_blocker"}
+      - {name: SessionId,          type: int,      description: "This session"}
+      - {name: BlockedBy,          type: int,      description: "The session directly blocking it; null for a head blocker"}
+      - {name: HeadBlocker,        type: int,      description: "The head blocker of its chain"}
+      - {name: WaitType,           type: string,   description: "e.g. LCK_M_U; null for a head blocker that isn't waiting"}
+      - {name: WaitSeconds,        type: real,     description: "How long it has been waiting"}
+      - {name: WaitResource,       type: string,   description: "What it waits for, e.g. KEY: 5:72057594045726720 (a1b2c3d4e5f6)"}
+      - {name: DatabaseName,       type: string,   description: "The session's current database"}
+      - {name: ProgramName,        type: string,   description: "The connection's program name"}
+      - {name: LoginName,          type: string,   description: "The session's login"}
+      - {name: HostName,           type: string,   description: "The client machine's name"}
+      - {name: SessionStatus,      type: string,   description: "running, runnable, suspended, sleeping (a sleeping head blocker = an idle open transaction)"}
+      - {name: OpenTransactions,   type: int,      description: "The session's open transaction count"}
+      - {name: TransactionSeconds, type: real,     description: "Age of its oldest open transaction; null if none"}
+      - {name: StatementText,      type: string,   description: "The current (or, if idle, the most recent) statement, up to 4000 characters"}
+
+  SqlXEvents_CL:
+    description: >
+      New events from the ShopLite_Diagnostics Extended Events files (F:\XE):
+      deadlock graphs, blocked process reports, requests over 2 seconds, errors of
+      severity 16+. Each event once, at its own time.
+    frequency: every 1 minute
+    kind: event (incremental, by file position)
+    unique_id: EventId
+    rows_per_day: tens to hundreds normally; more during incidents
+    columns:
+      - {name: TimeGenerated,     type: datetime, description: "When the event happened"}
+      - {name: Computer,          type: string,   description: "SQL Server's machine name"}
+      - {name: EventId,           type: string,   description: "unique_id: <file name>:<file offset>:<position in that block>, stable when the same events are read again"}
+      - {name: EventName,         type: string,   description: "xml_deadlock_report, blocked_process_report, rpc_completed, sql_batch_completed, error_reported"}
+      - {name: SessionId,         type: int,      description: "The session that raised it; null for deadlock reports (several sessions)"}
+      - {name: DatabaseName,      type: string,   description: "From the event's database_name action"}
+      - {name: ClientApp,         type: string,   description: "From client_app_name: the program name"}
+      - {name: LoginName,         type: string,   description: "From server_principal_name"}
+      - {name: ClientHost,        type: string,   description: "From client_hostname"}
+      - {name: QueryHash,         type: string,   description: "From query_hash (slow requests), hex; links to SqlTopQueries_CL"}
+      - {name: DurationMs,        type: real,     description: "Slow requests: how long it ran"}
+      - {name: CpuMs,             type: real,     description: "Slow requests: CPU time"}
+      - {name: LogicalReads,      type: long,     description: "Slow requests: pages read from memory"}
+      - {name: ErrorNumber,       type: int,      description: "Errors: SQL Server's error number"}
+      - {name: Severity,          type: int,      description: "Errors: 16 and up"}
+      - {name: Message,           type: string,   description: "Errors: the message, up to 2000 characters"}
+      - {name: SqlText,           type: string,   description: "The statement or batch, up to 4000 characters"}
+      - {name: EventXml,          type: string,   description: "The whole event as XML (the deadlock graph, the blocked process report), up to 30000 characters"}
+      - {name: EventXmlTruncated, type: bool,     description: "True if EventXml was cut"}
+
+  # ===========================================================================
+  # SQL Server internals: every 5 or 15 minutes
+  # ===========================================================================
+  SqlDatabases_CL:
+    description: >
+      One row per database: state, recovery model, what's keeping the log from
+      being reused, sizes, and when it was last backed up (normal backups, not
+      COPY_ONLY). Drives the log-full and backup-age alerts.
+    frequency: every 5 minutes
+    kind: snapshot
+    rows_per_day: 840
+    columns:
+      - {name: TimeGenerated,    type: datetime, description: "Snapshot time"}
+      - {name: Computer,         type: string,   description: "SQL Server's machine name"}
+      - {name: DatabaseName,     type: string,   description: "e.g. SalesDB, ReportingDB, DBA, tempdb, msdb, master"}
+      - {name: State,            type: string,   description: "ONLINE, RESTORING, ... (state_desc)"}
+      - {name: RecoveryModel,    type: string,   description: "FULL or SIMPLE"}
+      - {name: LogReuseWait,     type: string,   description: "Why the log can't be reused yet: NOTHING, LOG_BACKUP, ACTIVE_TRANSACTION, ..."}
+      - {name: DataSizeMB,       type: real,     description: "Size of the data files"}
+      - {name: DataUsedMB,       type: real,     description: "Space used inside them"}
+      - {name: LogSizeMB,        type: real,     description: "Size of the log file"}
+      - {name: LogUsedPercent,   type: real,     description: "Percentage of the log in use (alert over 70)"}
+      - {name: LastFullBackupAt, type: datetime, description: "Latest full backup's finish; null if none"}
+      - {name: LastDiffBackupAt, type: datetime, description: "Latest differential's finish; null if none"}
+      - {name: LastLogBackupAt,  type: datetime, description: "Latest log backup's finish; null if none (SIMPLE databases have none)"}
+
+  SqlFileIo_CL:
+    description: >
+      Reads, writes, and how long they took, per database file
+      (sys.dm_io_virtual_file_stats). Latency = stall / count, computed when queried,
+      so hourly rollups stay exact.
+    frequency: every 5 minutes
+    kind: snapshot (deltas)
+    rows_per_day: 1700
+    columns:
+      - {name: TimeGenerated,   type: datetime, description: "Snapshot time"}
+      - {name: Computer,        type: string,   description: "SQL Server's machine name"}
+      - {name: DatabaseName,    type: string,   description: "The file's database (tempdb included)"}
+      - {name: FileLogicalName, type: string,   description: "e.g. SalesDB, SalesDB_log"}
+      - {name: FileType,        type: string,   description: "ROWS (data) or LOG"}
+      - {name: Reads,           type: long,     description: "delta: read operations"}
+      - {name: Writes,          type: long,     description: "delta: write operations"}
+      - {name: ReadBytes,       type: long,     description: "delta: bytes read"}
+      - {name: WriteBytes,      type: long,     description: "delta: bytes written"}
+      - {name: ReadStallMs,     type: long,     description: "delta: total time reads waited (ReadStallMs / Reads = average read latency)"}
+      - {name: WriteStallMs,    type: long,     description: "delta: total time writes waited"}
+      - {name: IntervalSeconds, type: real,     description: "Seconds since the previous snapshot"}
+
+  SqlTopQueries_CL:
+    description: >
+      From Query Store (SalesDB and ReportingDB): for each completed 15-minute Query
+      Store interval, the 25 queries per database with the most total duration, per
+      plan. PlansForQuery above 1 means the query ran with more than one plan: a
+      possible plan regression. Each interval is sent once, after it ends, so
+      nothing is counted twice.
+    frequency: every 15 minutes
+    kind: event (incremental, by Query Store interval)
+    unique_id: EventId
+    rows_per_day: 2000
+    columns:
+      - {name: TimeGenerated,     type: datetime, description: "End of the Query Store interval summarized"}
+      - {name: Computer,          type: string,   description: "SQL Server's machine name"}
+      - {name: EventId,           type: string,   description: "unique_id: <database>:<Query Store interval id>:<plan id>"}
+      - {name: DatabaseName,      type: string,   description: "SalesDB or ReportingDB"}
+      - {name: WindowStart,       type: datetime, description: "Start of the Query Store interval summarized"}
+      - {name: QueryId,           type: long,     description: "Query Store's query_id (stable within the database)"}
+      - {name: PlanId,            type: long,     description: "Query Store's plan_id"}
+      - {name: QueryHash,         type: string,   description: "query_hash, hex: the same text shape across databases and in XE events"}
+      - {name: PlanHash,          type: string,   description: "query_plan_hash, hex: changes when the plan changes"}
+      - {name: IsForcedPlan,      type: bool,     description: "True if this plan is forced in Query Store (sp_query_store_force_plan): the key clue when a forced plan causes a regression"}
+      - {name: Executions,        type: long,     description: "Executions in the window"}
+      - {name: TotalDurationMs,   type: real,     description: "Sum of durations (average = TotalDurationMs / Executions)"}
+      - {name: TotalCpuMs,        type: real,     description: "Sum of CPU time"}
+      - {name: TotalLogicalReads, type: real,     description: "Sum of pages read from memory"}
+      - {name: MaxDurationMs,     type: real,     description: "The slowest single execution"}
+      - {name: PlansForQuery,     type: int,      description: "Distinct plans this query used in the window"}
+      - {name: QueryText,         type: string,   description: "The query's text, up to 2000 characters"}
+
+  # ===========================================================================
+  # Operations: every 5 minutes, each event once
+  # ===========================================================================
+  SqlAgentJobRuns_CL:
+    description: >
+      Each finished SQL Agent job run (msdb.dbo.sysjobhistory, the job outcome row),
+      with the failing step's name and message when it failed.
+    frequency: every 5 minutes
+    kind: event (incremental, by msdb instance_id)
+    unique_id: HistoryId
+    rows_per_day: 60
+    columns:
+      - {name: TimeGenerated,     type: datetime, description: "When the run finished"}
+      - {name: Computer,          type: string,   description: "SQL Server's machine name"}
+      - {name: JobName,           type: string,   description: "e.g. ShopLite - Backup SalesDB LOG"}
+      - {name: Category,          type: string,   description: "The job's category, e.g. ShopLite"}
+      - {name: Outcome,           type: string,   description: "succeeded, failed, retry, or cancelled"}
+      - {name: StartedAt,         type: datetime, description: "When the run started"}
+      - {name: DurationSeconds,   type: int,      description: "How long it ran"}
+      - {name: Message,           type: string,   description: "The outcome message, up to 2000 characters"}
+      - {name: FailedStepName,    type: string,   description: "The step that failed; null if it succeeded"}
+      - {name: FailedStepMessage, type: string,   description: "That step's error, up to 2000 characters; null if it succeeded"}
+      - {name: HistoryId,         type: long,     description: "msdb instance_id of the outcome row"}
+
+  SqlBackups_CL:
+    description: Each finished backup (msdb.dbo.backupset), any database.
+    frequency: every 5 minutes
+    kind: event (incremental, by backup_set_id)
+    unique_id: BackupSetId
+    rows_per_day: 45
+    columns:
+      - {name: TimeGenerated, type: datetime, description: "When the backup finished"}
+      - {name: Computer,      type: string,   description: "SQL Server's machine name"}
+      - {name: DatabaseName,  type: string,   description: "The database backed up"}
+      - {name: BackupType,    type: string,   description: "FULL, DIFF, or LOG"}
+      - {name: StartedAt,     type: datetime, description: "When it started"}
+      - {name: SizeMB,        type: real,     description: "Size before compression"}
+      - {name: CompressedMB,  type: real,     description: "Size written"}
+      - {name: IsCopyOnly,    type: bool,     description: "True for COPY_ONLY backups (not part of the chain)"}
+      - {name: Device,        type: string,   description: "Where it went: the blob URL or file path"}
+      - {name: BackupSetId,   type: long,     description: "msdb backup_set_id"}
+
+  OpsEtlRuns_CL:
+    description: Each finished vendor ETL run (SalesDB.ops.etl_runs), succeeded or failed.
+    frequency: every 5 minutes
+    kind: event (incremental, by finished_at)
+    unique_id: RunId
+    rows_per_day: 1
+    columns:
+      - {name: TimeGenerated,       type: datetime, description: "When the run finished"}
+      - {name: Computer,            type: string,   description: "SQL Server's machine name"}
+      - {name: RunId,               type: long,     description: "ops.etl_runs.run_id"}
+      - {name: Feed,                type: string,   description: "vendor-supplier-feed"}
+      - {name: ContractVersion,     type: string,   description: "e.g. 1.0.0"}
+      - {name: StartedAt,           type: datetime, description: "When it started"}
+      - {name: Status,              type: string,   description: "succeeded or failed"}
+      - {name: DurationSeconds,     type: real,     description: "How long it ran"}
+      - {name: RowsRead,            type: int,      description: "Rows read from the vendor; null if it failed before"}
+      - {name: RowsSkipped,         type: int,      description: "Unknown SKUs skipped"}
+      - {name: RowsInserted,        type: int,      description: "New supplier rows"}
+      - {name: RowsUpdated,         type: int,      description: "Changed supplier rows"}
+      - {name: RowsDiscontinued,    type: int,      description: "Rows newly discontinued"}
+      - {name: RowsUnchanged,       type: int,      description: "Rows with no change"}
+      - {name: VendorNewestPriceAt, type: datetime, description: "The vendor's newest price change (freshness evidence)"}
+      - {name: ErrorStage,          type: string,   description: "connect, validate, extract, stage, or merge; null if it succeeded"}
+      - {name: ErrorMessage,        type: string,   description: "Up to 2000 characters; null if it succeeded"}
+
+  OpsRefreshRuns_CL:
+    description: Each finished ReportingDB refresh (ReportingDB.ops.refresh_runs).
+    frequency: every 5 minutes
+    kind: event (incremental, by finished_at)
+    unique_id: RunId
+    rows_per_day: 1
+    columns:
+      - {name: TimeGenerated,   type: datetime, description: "When the refresh finished"}
+      - {name: Computer,        type: string,   description: "SQL Server's machine name"}
+      - {name: RunId,           type: long,     description: "ops.refresh_runs.run_id"}
+      - {name: Mode,            type: string,   description: "incremental or full"}
+      - {name: FromDate,        type: datetime, description: "First day rebuilt (midnight UTC)"}
+      - {name: CutoffAt,        type: datetime, description: "Orders created before this were included"}
+      - {name: StartedAt,       type: datetime, description: "When it started"}
+      - {name: Status,          type: string,   description: "succeeded or failed"}
+      - {name: DurationSeconds, type: real,     description: "How long it ran"}
+      - {name: SaleLines,       type: int,      description: "Order lines read from SalesDB"}
+      - {name: DaysRebuilt,     type: int,      description: "Days replaced"}
+      - {name: RowsWritten,     type: int,      description: "Rows written across the report tables"}
+      - {name: ErrorMessage,    type: string,   description: "Up to 2000 characters; null if it succeeded"}
+
+  DbaRestoreTests_CL:
+    description: Each finished restore test (DBA.dbo.restore_test_runs).
+    frequency: every 5 minutes
+    kind: event (incremental, by finished_at)
+    unique_id: RunId
+    rows_per_day: 0.2 (weekly)
+    columns:
+      - {name: TimeGenerated,        type: datetime, description: "When the test finished"}
+      - {name: Computer,             type: string,   description: "SQL Server's machine name"}
+      - {name: RunId,                type: long,     description: "restore_test_runs.run_id"}
+      - {name: StartedAt,            type: datetime, description: "When it started"}
+      - {name: Status,               type: string,   description: "succeeded or failed"}
+      - {name: FullBackupFinishedAt, type: datetime, description: "The full backup it restored"}
+      - {name: LogBackupsRestored,   type: int,      description: "Log backups applied"}
+      - {name: RestoredTo,           type: datetime, description: "End of the newest backup restored"}
+      - {name: RestoreSeconds,       type: int,      description: "Restore time: the measured RTO"}
+      - {name: CheckdbSeconds,       type: int,      description: "DBCC CHECKDB time"}
+      - {name: ErrorMessage,         type: string,   description: "Up to 2000 characters; null if it succeeded"}
+
+  DbaCommandLog_CL:
+    description: >
+      Each finished maintenance command from Ola Hallengren's CommandLog (backups,
+      index operations, statistics updates, CHECKDB).
+    frequency: every 5 minutes
+    kind: event (incremental, by CommandLog ID)
+    unique_id: CommandLogId
+    rows_per_day: 200
+    columns:
+      - {name: TimeGenerated,   type: datetime, description: "When the command finished"}
+      - {name: Computer,        type: string,   description: "SQL Server's machine name"}
+      - {name: CommandLogId,    type: long,     description: "CommandLog.ID"}
+      - {name: DatabaseName,    type: string,   description: "The database it ran on"}
+      - {name: CommandType,     type: string,   description: "e.g. BACKUP_DATABASE, BACKUP_LOG, ALTER_INDEX, UPDATE_STATISTICS, DBCC_CHECKDB"}
+      - {name: ObjectName,      type: string,   description: "schema.table for index and statistics commands; null otherwise"}
+      - {name: IndexName,       type: string,   description: "Index or statistics name; null otherwise"}
+      - {name: StartedAt,       type: datetime, description: "When it started"}
+      - {name: DurationSeconds, type: real,     description: "How long it ran"}
+      - {name: ErrorNumber,     type: int,      description: "0 = success"}
+      - {name: ErrorMessage,    type: string,   description: "Up to 2000 characters; null if none"}
+      - {name: Command,         type: string,   description: "The command run, up to 2000 characters"}
+
+  # ===========================================================================
+  # The vendor: every 15 minutes
+  # ===========================================================================
+  VendorFeed_CL:
+    description: >
+      A light check of the vendor's Postgres (Neon), as the read-only
+      shoplite_reader: can we connect, how long it took, and how fresh the newest
+      price is. Shows "the vendor is slow or down" between the daily ETL runs.
+    frequency: every 15 minutes
+    kind: snapshot
+    rows_per_day: 40
+    columns:
+      - {name: TimeGenerated,  type: datetime, description: "Check time"}
+      - {name: Computer,       type: string,   description: "SQL Server's machine name (where the check ran)"}
+      - {name: Reachable,      type: bool,     description: "Connected and queried successfully"}
+      - {name: ConnectMs,      type: real,     description: "Time to connect (Neon's free tier waking up shows here)"}
+      - {name: NewestPriceAt,  type: datetime, description: "max(supply.prices.updated_at); null if unreachable"}
+      - {name: FreshnessHours, type: real,     description: "Hours since NewestPriceAt (the contract allows 36)"}
+      - {name: CatalogItems,   type: long,     description: "Rows in supply.catalog_items"}
+      - {name: Error,          type: string,   description: "Why it failed, up to 1000 characters; null if reachable"}

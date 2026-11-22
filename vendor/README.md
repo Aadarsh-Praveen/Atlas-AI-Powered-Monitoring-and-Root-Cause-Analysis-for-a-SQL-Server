@@ -59,8 +59,11 @@ read -rs SHOPLITE_READER_PASSWORD && export SHOPLITE_READER_PASSWORD     # type,
 read -rs VENDOR_ACTIVITY_PASSWORD && export VENDOR_ACTIVITY_PASSWORD
 ```
 
-They're never stored in a file in the repo. ShopLite's copy of the reader password goes into
-`server/etl/.env` later (B2).
+Locally, put them in the **root `.env`** too (`SHOPLITE_READER_PASSWORD`, `VENDOR_ACTIVITY_PASSWORD`,
+next to `POSTGRES_*`): every component builds its vendor URL from these parts, encoding special
+characters (`tools/envconfig.py`), so you never write a local URL by hand. The `read -rs` lines above
+are only for the `psql` step below, which reads them from your shell. In production the URLs come from
+Neon (the GitHub secret, and the ETL's and collector's VM `.env` files).
 
 ---
 

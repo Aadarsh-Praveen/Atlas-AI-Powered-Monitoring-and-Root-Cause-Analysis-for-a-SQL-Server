@@ -24,6 +24,7 @@ import uuid
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from app import telemetry
 from app.config import get_settings
 
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -86,16 +87,22 @@ async def request_context_middleware(request: Request, call_next):
     incoming_source = request.headers.get(SYNTHETIC_HEADER, "")
     synthetic_source = incoming_source if SAFE_SYNTHETIC_SOURCE.match(incoming_source) else "-"
     request.state.synthetic_source = synthetic_source
+    # Application Insights custom dimensions (no-op when telemetry is off).
+    telemetry.tag_request(synthetic_source, request_id)
     started = time.perf_counter()
 
     try:
         try:
             response = await call_next(request)
-        except Exception:
+        except Exception as error:
             # Nothing else handled this error. Log the full traceback (with the
             # request ID) for us, and give the caller a clean message with a
-            # reference instead of a stack trace.
+            # reference instead of a stack trace. Also record it for
+            # Application Insights (AppExceptions): since the error becomes a
+            # normal 500 response here, the automatic instrumentation would
+            # otherwise never see the exception.
             logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+            telemetry.record_exception(error)
             response = JSONResponse(
                 status_code=500,
                 content={"detail": f"Unexpected error. Reference: {request_id}"},

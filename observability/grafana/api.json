@@ -1,0 +1,384 @@
+{
+  "uid": "shoplite-api",
+  "title": "ShopLite: API",
+  "description": "The ShopLite API from Application Insights (Log Analytics). Counts use sum(ItemCount) because of sampling.",
+  "tags": [
+    "shoplite",
+    "phase5"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "5m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "adx",
+        "label": "History (ADX)",
+        "type": "datasource",
+        "query": "grafana-azure-data-explorer-datasource",
+        "hide": 0
+      },
+      {
+        "name": "azmon",
+        "label": "Now (Azure Monitor)",
+        "type": "datasource",
+        "query": "grafana-azure-monitor-datasource",
+        "hide": 0
+      },
+      {
+        "name": "workspace",
+        "label": "Log Analytics workspace resource ID",
+        "type": "textbox",
+        "hide": 0,
+        "query": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod",
+        "current": {
+          "text": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod",
+          "value": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/Microsoft.OperationalInsights/workspaces/law-shoplite-prod"
+        }
+      },
+      {
+        "name": "subscription",
+        "label": "Subscription ID",
+        "type": "textbox",
+        "hide": 0,
+        "query": "<subscription-id>",
+        "current": {
+          "text": "<subscription-id>",
+          "value": "<subscription-id>"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Requests per minute by source",
+      "description": "Tagged by the Playwright shoppers and Locust (X-Synthetic-Source).",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "AppRequests | where $__timeFilter(TimeGenerated)\n            | extend Source = tostring(Properties[\"shoplite.synthetic_source\"])\n            | extend Source = iff(Source in (\"\", \"-\"), \"real (untagged)\", Source)\n            | summarize Requests = sum(ItemCount) by bin(TimeGenerated, 5m), Source\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 30
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency: median and p95",
+      "description": "The latency alert fires when p95 stays above 1.5 s.",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "AppRequests | where $__timeFilter(TimeGenerated)\n            | summarize P50 = percentile(DurationMs, 50), P95 = percentile(DurationMs, 95) by bin(TimeGenerated, 5m)\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Server errors (%)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "AppRequests | where $__timeFilter(TimeGenerated)\n            | summarize Errors = sumif(ItemCount, ResultCode startswith \"5\"), Requests = sum(ItemCount)\n                by bin(TimeGenerated, 5m)\n            | project TimeGenerated, ErrorPercent = iff(Requests == 0, 0.0, 100.0 * Errors / Requests)\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Endpoints in the time range",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "AppRequests | where $__timeFilter(TimeGenerated)\n            | summarize Requests = sum(ItemCount), P95Ms = round(percentile(DurationMs, 95)),\n                        ServerErrors = sumif(ItemCount, ResultCode startswith \"5\"),\n                        Status409 = sumif(ItemCount, ResultCode == \"409\")\n                by Name\n            | order by Requests desc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "table"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Dependencies: SQL and the ranking service",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "AppDependencies | where $__timeFilter(TimeGenerated)\n            | summarize Calls = sum(ItemCount), AvgMs = round(avg(DurationMs), 1), P95Ms = round(percentile(DurationMs, 95)),\n                        Failed = sumif(ItemCount, Success == false)\n                by Type, Target\n            | order by Calls desc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "table"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Slowest SQL statements (p95 ms, top 5)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "let top = AppDependencies | where $__timeFilter(TimeGenerated) and Type == \"SQL\"\n                | summarize P95 = percentile(DurationMs, 95) by Data | top 5 by P95 | project Data;\n            AppDependencies | where $__timeFilter(TimeGenerated) and Type == \"SQL\" and Data in (top)\n            | summarize P95 = percentile(DurationMs, 95) by bin(TimeGenerated, 15m), Statement = substring(Data, 0, 60)\n            | order by TimeGenerated asc",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "time_series"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Exceptions (newest first)",
+      "description": "",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "${azmon}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "${azmon}"
+          },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "query": "AppExceptions | where $__timeFilter(TimeGenerated)\n            | project TimeGenerated, ExceptionType, OuterMessage, OperationName, OperationId\n            | order by TimeGenerated desc | take 50",
+            "resources": [
+              "${workspace}"
+            ],
+            "resultFormat": "table"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 8
+      }
+    }
+  ]
+}

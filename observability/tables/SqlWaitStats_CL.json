@@ -1,0 +1,11 @@
+[
+  {
+    "TimeGenerated": "2026-11-22T15:00:00.000000Z",
+    "Computer": "example",
+    "WaitType": "example",
+    "WaitTimeMs": 1,
+    "SignalWaitTimeMs": 1,
+    "WaitingTasks": 1,
+    "IntervalSeconds": 1.5
+  }
+]

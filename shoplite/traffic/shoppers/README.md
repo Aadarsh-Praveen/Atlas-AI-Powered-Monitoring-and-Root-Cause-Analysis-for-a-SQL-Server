@@ -78,8 +78,9 @@ API_URL=https://shoplite-aadarsh.northcentralus.cloudapp.azure.com \
 python run.py --duration 120
 ```
 
-The admin persona only runs when `SHOPLITE_ADMIN_TOKEN` is set. Set it in your shell from your
-password manager; never write it into a file in the repo.
+The admin persona only runs when an admin token is set: `SHOPLITE_ADMIN_TOKEN` (the GitHub secret),
+or locally the root `.env`'s `ADMIN_TOKEN`, which the shoppers read automatically (layered settings,
+`tools/envconfig.py`), along with `STOREFRONT_URL` and `API_URL`.
 
 ## Settings
 

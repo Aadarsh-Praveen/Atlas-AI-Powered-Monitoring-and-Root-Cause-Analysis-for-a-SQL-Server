@@ -71,7 +71,7 @@ Copy-Item C:\atlas\shoplite\api\deploy\.env.production.example C:\atlas\shoplite
 notepad C:\atlas\shoplite\api\.env
 ```
 
-Only the three settings under **"1. EDIT THESE"** at the top need changing:
+Only the four settings under **"1. EDIT THESE"** at the top need changing:
 
 - `DB_PASSWORD`: **must be identical** to `SHOPLITE_APP_PASSWORD` in the VM's root `.env`
   (`C:\atlas\.env`), because `apply_schema.py` created the `shoplite_app` login with that value. Copy
@@ -80,6 +80,13 @@ Only the three settings under **"1. EDIT THESE"** at the top need changing:
 - `ADMIN_TOKEN`: a new token, generated in step 3 below (come back and fill it in).
 - `ALLOWED_ORIGINS`: already production's value, `https://shoplite-aadarsh.vercel.app`. Edit that
   line itself; there's no commented example to confuse it with.
+- `APPLICATIONINSIGHTS_CONNECTION_STRING` (API 1.2.0, Phase 5): the connection string of
+  `appi-shoplite-prod` (`observability/azure-setup.md`, step 2). Empty turns telemetry off; the
+  placeholder `replace-me` stops the API at startup with a message saying so.
+
+The template starts with `LOAD_ROOT_ENV=false`, so the API never reads the root `.env` (admin
+passwords) on the VM. **Already have this file from before (it predates layered settings)?** Add that
+line to it.
 
 Restrict the file to Administrators, SYSTEM, and the service account (read-only):
 

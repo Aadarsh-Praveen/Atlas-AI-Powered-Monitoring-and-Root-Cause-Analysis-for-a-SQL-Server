@@ -1,0 +1,66 @@
+<!--
+  server/collector/deploy/shoplite-collector.xml: WinSW service definition for
+  the ShopLite monitoring collector on prod-sql-01. Same tool and layout as the
+  API (shoplite/api/deploy/shoplite-api.xml):
+
+      C:\services\shoplite-collector\shoplite-collector.exe   WinSW-x64.exe, renamed
+      C:\services\shoplite-collector\shoplite-collector.xml   a copy of THIS file
+
+  After editing this file: git pull on the VM, copy it again, and reinstall
+  the service (server/collector/README.md, "Changing the service definition").
+
+  Why a Windows service and not a SQL Agent job: monitoring must not depend on
+  what it monitors. If SQL Server or SQL Agent stops, this keeps running and
+  says so in its heartbeat (SqlOk = false). For the same reason there is NO
+  <depend>MSSQLSERVER</depend> here (the API has one): the collector must start,
+  and keep running, even when SQL Server can't.
+-->
+<service>
+  <id>shoplite-collector</id>
+  <name>ShopLite Collector</name>
+  <description>ShopLite monitoring collector: SQL Server and operations telemetry to Log Analytics and ADX, every minute, with a heartbeat.</description>
+
+  <!-- The collector's own virtual environment (server/collector/.venv). -->
+  <executable>C:\atlas\server\collector\.venv\Scripts\python.exe</executable>
+  <arguments>main.py</arguments>
+  <!-- main.py imports its sibling modules from the current folder and reads
+       .env next to itself. -->
+  <workingdirectory>C:\atlas\server\collector</workingdirectory>
+
+  <!-- Log lines are written immediately, not buffered. -->
+  <env name="PYTHONUNBUFFERED" value="1" />
+
+  <!-- Low-privilege built-in account, like the API. It needs: read access to
+       C:\atlas (all users have it), read access to server\collector\.env,
+       and write access to F:\collector (state and buffer) and F:\Logs\collector
+       (these logs); README.md grants the last three. The VM's managed identity
+       (for Log Analytics) is available to every process on the VM through
+       Azure's local metadata endpoint, so no extra rights are needed for it. -->
+  <serviceaccount>
+    <username>NT AUTHORITY\LocalService</username>
+  </serviceaccount>
+
+  <!-- Start with Windows, a little after the other services. -->
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+
+  <!-- Restart on crash: 10 s, 30 s, then every 60 s; the count resets after an
+       hour. (main.py already survives failed cycles; this covers the process
+       itself dying.) -->
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- On stop, WinSW sends Ctrl+C; main.py finishes the current cycle (its
+       queries time out after 15 s) and exits. Wait up to 60 s before killing. -->
+  <stoptimeout>60 sec</stoptimeout>
+
+  <!-- One log line per cycle plus warnings; rolls at 10 MB, 10 files kept
+       (at most about 200 MB on the data disk). -->
+  <logpath>F:\Logs\collector</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>10</keepFiles>
+  </log>
+</service>

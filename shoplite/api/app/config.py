@@ -1,7 +1,10 @@
 """Settings for the ShopLite API, read from the environment and validated.
 
-Values come from shoplite/api/.env (see .env.example) and from real
-environment variables, which take precedence. Everything the API can be
+Values come in layers (tools/envconfig.py): real environment variables,
+then shoplite/api/.env if present, then the repo's root .env. Locally the
+root .env is enough (DB_PASSWORD falls back to SHOPLITE_APP_PASSWORD there);
+on the VM the API's own .env is its only source (LOAD_ROOT_ENV=false; the
+root .env is locked to Administrators anyway). Everything the API can be
 configured with is a field on Settings; code never reads os.environ directly.
 
 If a required value is missing or invalid, creating Settings raises an error
@@ -9,27 +12,36 @@ naming the field, and the API refuses to start. Failing at startup is far
 easier to diagnose than failing on the first request.
 """
 
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # shoplite/api/.env, found relative to this file so the API can be started
 # from any folder.
 API_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = API_DIR / ".env"
+REPO_ROOT = API_DIR.parent.parent
+
+# The shared layered loader (tools/envconfig.py): fills the process
+# environment from shoplite/api/.env, then the root .env, without replacing
+# anything already set. Settings below then read the environment.
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+from envconfig import load_layers  # noqa: E402
 
 PLACEHOLDER = "replace-me"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=ENV_FILE,
-        env_file_encoding="utf-8",
+        # No env_file here: load_layers() (in get_settings) has already put the
+        # files' values into the environment, in the right order.
         case_sensitive=False,   # DB_HOST in .env fills db_host here
         extra="ignore",         # unrelated variables in the environment are fine
+        populate_by_name=True,
     )
 
     # --- App -----------------------------------------------------------------
@@ -43,10 +55,16 @@ class Settings(BaseSettings):
     db_name: str = "SalesDB"
     db_user: str = "shoplite_app"
     # Required: no default. SecretStr prints as '**********' if logged.
-    db_password: SecretStr
+    # DB_PASSWORD (the API's own .env, e.g. on the VM) or, locally, the root
+    # .env's canonical SHOPLITE_APP_PASSWORD.
+    db_password: SecretStr = Field(validation_alias=AliasChoices("DB_PASSWORD", "SHOPLITE_APP_PASSWORD"))
     # Defaults to the secure choice. The local .env sets it to true because
     # the container's certificate is self-signed.
-    db_trust_server_certificate: bool = False
+    # DB_TRUST_SERVER_CERTIFICATE (the API's own .env; the VM sets it explicitly), else
+    # the root .env's SQL_TRUST_SERVER_CERTIFICATE (true locally: the container's
+    # certificate is self-signed), else the secure default, false.
+    db_trust_server_certificate: bool = Field(
+        default=False, validation_alias=AliasChoices("DB_TRUST_SERVER_CERTIFICATE", "SQL_TRUST_SERVER_CERTIFICATE"))
 
     db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
     db_query_timeout_seconds: int = Field(default=30, ge=1, le=600)
@@ -73,6 +91,19 @@ class Settings(BaseSettings):
     payment_delay_min_ms: int = Field(default=200, ge=0, le=30000)
     payment_delay_max_ms: int = Field(default=800, ge=0, le=30000)
 
+    # --- Simulated ranking service (flag search_ranking_v2, app/ranking.py) ----
+    # Used only while the flag is on: how long each call takes, and how often
+    # it fails. The incident injector (Phase 5) sets these.
+    ranking_service_delay_ms: int = Field(default=2500, ge=0, le=30000)
+    ranking_service_error_rate: float = Field(default=0.5, ge=0, le=1)
+
+    # --- Telemetry (Phase 5, app/telemetry.py) ----------------------------------
+    # Application Insights connection string. Not set = telemetry off (local).
+    # Treated as a secret: whoever has it can send data into the resource.
+    applicationinsights_connection_string: SecretStr | None = None
+    # Share of requests kept (each with its SQL calls). 0.25 = one in four.
+    telemetry_sampling_ratio: float = Field(default=0.25, gt=0, le=1)
+
     # --- Validation ----------------------------------------------------------
 
     @field_validator("db_password", "admin_token")
@@ -81,6 +112,15 @@ class Settings(BaseSettings):
         """Catch a .env copied from the example but never filled in."""
         if value.get_secret_value().strip() in ("", PLACEHOLDER):
             raise ValueError(f"{info.field_name.upper()} still has the placeholder value; set it in .env")
+        return value
+
+    @field_validator("applicationinsights_connection_string")
+    @classmethod
+    def connection_string_not_placeholder(cls, value: SecretStr | None) -> SecretStr | None:
+        """Empty means telemetry off; the template's placeholder means someone forgot to fill it in."""
+        if value is not None and value.get_secret_value().strip() == PLACEHOLDER:
+            raise ValueError("APPLICATIONINSIGHTS_CONNECTION_STRING still has the placeholder value: "
+                             "set it, or leave it empty to turn telemetry off")
         return value
 
     @field_validator("admin_token")
@@ -141,4 +181,5 @@ def get_settings() -> Settings:
     Tests can call get_settings.cache_clear() to reload after changing the
     environment.
     """
+    load_layers(API_DIR)        # shoplite/api/.env, then the root .env; real variables win
     return Settings()

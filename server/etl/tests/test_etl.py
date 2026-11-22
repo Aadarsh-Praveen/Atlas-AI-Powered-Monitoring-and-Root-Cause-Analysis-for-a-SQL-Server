@@ -34,7 +34,6 @@ from pathlib import Path
 import psycopg
 import pyodbc
 import pytest
-from dotenv import load_dotenv
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
@@ -45,8 +44,11 @@ sys.path.insert(0, str(ETL_DIR))             # so the tests can import the ETL m
 import run_etl  # noqa: E402
 from contract import validate  # noqa: E402
 
-load_dotenv(ETL_DIR / ".env")                # the ETL's settings
-load_dotenv(REPO_ROOT / ".env")              # local admin logins (SA_PASSWORD, POSTGRES_*); no name clashes
+# Layered settings, exactly as the ETL reads them: server/etl/.env if present,
+# then the root .env (which also has the local admin logins: SA_PASSWORD, POSTGRES_*).
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+from envconfig import load_layers  # noqa: E402
+load_layers(ETL_DIR)
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 SCRATCH = "supply_contract_test"
