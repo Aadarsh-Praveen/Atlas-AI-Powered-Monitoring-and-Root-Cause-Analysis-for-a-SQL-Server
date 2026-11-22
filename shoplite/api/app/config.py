@@ -20,10 +20,9 @@ from typing import Literal
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# shoplite/api/.env, found relative to this file so the API can be started
-# from any folder.
+# The API's folder (its optional .env lives here) and the repo root, found
+# relative to this file so the API can be started from any folder.
 API_DIR = Path(__file__).resolve().parent.parent
-ENV_FILE = API_DIR / ".env"
 REPO_ROOT = API_DIR.parent.parent
 
 # The shared layered loader (tools/envconfig.py): fills the process

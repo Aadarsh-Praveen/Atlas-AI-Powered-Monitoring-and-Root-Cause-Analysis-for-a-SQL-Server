@@ -1,6 +1,7 @@
 """Shared setup for the ShopLite API smoke tests.
 
-The tests run against your LOCAL, seeded SalesDB using shoplite/api/.env,
+The tests run against your LOCAL, seeded SalesDB with the layered settings
+(locally the root .env; shoplite/api/.env only if you made one to override),
 and they change data the way real shoppers do (carts, orders, stock).
 Run from shoplite/api:  python -m pytest
 
@@ -11,13 +12,13 @@ import os
 from decimal import Decimal
 
 # Make payments predictable and fast BEFORE the app (and its settings) load:
-# real environment variables override shoplite/api/.env. With a 2% random
+# real environment variables override every .env layer. With a 2% random
 # decline, a checkout test would fail about 1 run in 50 for no real reason.
 # Tests that need a decline switch it on explicitly (see test_smoke.py).
 os.environ["PAYMENT_DECLINE_RATE"] = "0"
 os.environ["PAYMENT_DELAY_MIN_MS"] = "0"
 os.environ["PAYMENT_DELAY_MAX_MS"] = "0"
-# Tests never send telemetry, whatever shoplite/api/.env says, and start with
+# Tests never send telemetry, whatever the .env files say, and start with
 # every feature flag off (tests that need a flag switch it on themselves).
 os.environ["APPLICATIONINSIGHTS_CONNECTION_STRING"] = ""
 os.environ["FEATURE_FLAGS"] = ""
