@@ -20,7 +20,7 @@ read-only) and loads them into SalesDB's `vendor.supplier_prices`.
 | `contract.py` | Checks the vendor against `knowledge/contracts/vendor-supplier-feed.yml` |
 | `run_etl.py` | The ETL itself |
 | `requirements.txt` | Its packages, installed in its own `.venv` |
-| `.env.example` | Settings template (copy to `.env`) |
+| `.env.example` | The VM's settings template (`server\etl\.env`); locally the root `.env` is enough |
 | `tests/test_etl.py` | Tests against the local Docker databases |
 
 The SQL scripts are **not** part of `shoplite/db/apply_schema.py`, which drops and recreates SalesDB.

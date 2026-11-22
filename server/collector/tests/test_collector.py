@@ -5,9 +5,9 @@ Run from the repo root, with the collector's virtual environment:
     server/collector/.venv/bin/python -m pytest server/collector/tests -v
 
 Needs (README.md, "Local"): Phase 4 set up locally (SalesDB, ReportingDB, DBA
-with Ola, the XE session), sql/001_monitor_login.sql applied, and
-server/collector/.env with local values. The root .env provides the local SQL
-admin, used ONLY to set up the blocking scenario. Anything not on localhost
+with Ola, the XE session), sql/001_monitor_login.sql applied, and the root
+.env (SHOPLITE_MONITOR_PASSWORD; also the local SQL admin, used ONLY to set up
+the blocking scenario). No server/collector/.env needed: that's the VM's file. Anything not on localhost
 stops the run. A database that isn't reachable makes its tests SKIP.
 
 What the groups prove:
@@ -67,7 +67,7 @@ def config():
     try:
         loaded = main.load_config()
     except main.ConfigError as error:
-        pytest.skip(f"server/collector/.env: {error}")
+        pytest.skip(f"collector settings (root .env, or server/collector/.env if present): {error}")
     if loaded.sql_host not in ("localhost", "127.0.0.1"):
         pytest.exit(f"SQL_HOST is '{loaded.sql_host}'. These tests run against local SQL Server only.", returncode=2)
     return loaded

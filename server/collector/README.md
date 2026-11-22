@@ -21,7 +21,7 @@ monitors. When SQL Server is down, the collector keeps running and its heartbeat
 | `buffer.py` | The disk buffer: records wait here until their destination accepts them |
 | `senders.py` | Log Analytics (managed identity), ADX (app registration), and print |
 | `main.py` | The service loop: collect → store → commit → send → heartbeat |
-| `.env.example` | Settings template |
+| `.env.example` | The VM's settings template (`server\collector\.env`); locally the root `.env` is enough |
 | `requirements.txt` | Its packages, in its own `.venv` |
 | `tests/test_collector.py` | Tests against local SQL Server, including every query as `shoplite_monitor` |
 | `deploy/shoplite-collector.xml` | The WinSW service definition |
@@ -229,7 +229,7 @@ SELECT permission_name FROM sys.fn_my_permissions(NULL, 'SERVER');   -- VIEW SER
 | Symptom | Likely cause |
 |---|---|
 | No heartbeat in Log Analytics | Service stopped (`Get-Service shoplite-collector`), or every send fails: the log shows `send failed` with the reason |
-| `SqlOk = false`, LastError "Login failed for user 'shoplite_monitor'" | `SQL_PASSWORD` in `.env` doesn't match the login (re-run the login script with the same value) |
+| `SqlOk = false`, LastError "Login failed for user 'shoplite_monitor'" | The password doesn't match the login: `SQL_PASSWORD` in the collector's `.env` on the VM (locally the root `.env`'s `SHOPLITE_MONITOR_PASSWORD`). Re-run the login script with the same value |
 | `QueriesFailed > 0` | `FailedCollections` names every failure (e.g. `top_queries, databases[master]`); the log has a `collection ... failed:` line with each full message. Usual causes: a timeout under heavy load, a missing permission, a database being restored |
 | `LogAnalyticsOk = false`, 403 | The VM's managed identity lacks "Monitoring Metrics Publisher" on the data collection rules (setup guide) |
 | `LogAnalyticsOk = false`, 404 or "stream" errors | Wrong DCE URL or DCR immutable ID, or a custom table/stream is missing |

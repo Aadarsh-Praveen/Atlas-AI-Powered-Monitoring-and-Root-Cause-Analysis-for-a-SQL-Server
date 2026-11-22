@@ -5,8 +5,9 @@ Run from the repo root, with the ETL's virtual environment:
     server/etl/.venv/bin/python -m pytest server/etl/tests -v
 
 Needs (README.md, "Local"): vendor-pg schema and seed, SalesDB with
-server/etl/sql 001 and 002 applied, server/etl/.env with local values, and
-the root .env (the local admin logins, used only to build scratch data).
+server/etl/sql 001 and 002 applied, and the root .env (SHOPLITE_ETL_PASSWORD,
+SHOPLITE_READER_PASSWORD; also the local admin logins, used only to build
+scratch data). No server/etl/.env needed: that's the VM's file.
 A test whose database isn't reachable is SKIPPED with the reason, not failed.
 Any non-localhost setting stops the whole run: never point these at production.
 
@@ -73,7 +74,7 @@ def settings():
     try:
         loaded = run_etl.load_settings()
     except run_etl.ConfigError as error:
-        pytest.skip(f"server/etl/.env: {error}")
+        pytest.skip(f"ETL settings (root .env, or server/etl/.env if present): {error}")
     require_local(loaded.salesdb_host, "SALESDB_HOST")
     require_local(conninfo_to_dict(loaded.vendor_url).get("host", "localhost"), "VENDOR_READER_URL")
     return loaded
