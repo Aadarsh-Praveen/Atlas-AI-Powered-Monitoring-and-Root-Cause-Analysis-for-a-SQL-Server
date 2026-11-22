@@ -52,7 +52,9 @@ class VendorSchemaChange(Incident):
     def _connect(self, ctx: Context):
         import psycopg
         if not ctx.settings.vendor_admin_url:
-            raise Refused("VENDOR_ADMIN_URL isn't set in incidents/.env (Mac copy).")
+            raise Refused("No vendor admin URL. Locally it's built from the root .env's POSTGRES_USER, "
+                          "POSTGRES_PASSWORD and POSTGRES_DB; in production set VENDOR_ADMIN_URL in "
+                          "incidents/.env.prod and run with --env-file incidents/.env.prod (Mac only).")
         return psycopg.connect(ctx.settings.vendor_admin_url, connect_timeout=15, autocommit=True)
 
     def _columns(self, ctx: Context) -> set[str]:

@@ -52,7 +52,9 @@ class StaleVendorFeed(Incident):
     def _hours_since_update(self, ctx: Context) -> float | None:
         import psycopg
         if not ctx.settings.vendor_admin_url:
-            raise Refused("VENDOR_ADMIN_URL isn't set in incidents/.env (Mac copy).")
+            raise Refused("No vendor admin URL. Locally it's built from the root .env's POSTGRES_USER, "
+                          "POSTGRES_PASSWORD and POSTGRES_DB; in production set VENDOR_ADMIN_URL in "
+                          "incidents/.env.prod and run with --env-file incidents/.env.prod (Mac only).")
         with psycopg.connect(ctx.settings.vendor_admin_url, connect_timeout=15) as conn:
             value = conn.execute(FRESHNESS).fetchone()[0]
         return None if value is None else float(value)

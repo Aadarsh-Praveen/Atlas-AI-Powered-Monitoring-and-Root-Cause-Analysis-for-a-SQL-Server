@@ -6,6 +6,6 @@
 # The ground truth is uploaded with Python's own urllib: no Azure SDK needed.
 
 pyodbc>=5.2,<6            # SQL Server incidents
-python-dotenv>=1.0,<2     # incidents/.env, and the API's .env (shoplite_app's password, feature flags)
+python-dotenv>=1.0,<2     # layered settings (tools/envconfig.py), and the API's .env when it has one (password, feature flags)
 psycopg[binary]>=3.2,<4   # vendor incidents (Postgres)
 requests>=2.32,<3         # the CPU-credits incident's extra load on the API

@@ -19,8 +19,12 @@ Exit codes: 0 done, 1 the incident failed (and was reverted), 2 refused by a
 guard or a configuration problem (nothing was changed), 3 'status' couldn't
 check every incident (result unknown).
 
-Each incident is one file in incidents/scenarios/, defining INCIDENT. Settings:
-incidents/.env (template .env.example). See incidents/README.md.
+Each incident is one file in incidents/scenarios/, defining INCIDENT.
+
+Settings are layered (tools/envconfig.py): real environment > incidents/.env
+(or --env-file) > the root .env. Locally the root .env is enough. Production
+copies (incidents/.env on the VM, incidents/.env.prod on the Mac; template
+.env.example) set LOAD_ROOT_ENV=false. See incidents/README.md.
 """
 
 import argparse
