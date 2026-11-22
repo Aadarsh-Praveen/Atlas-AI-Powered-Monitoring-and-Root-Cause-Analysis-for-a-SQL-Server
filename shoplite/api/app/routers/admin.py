@@ -1,8 +1,9 @@
 """Admin endpoints: inventory, restocking, and the two sales reports.
 
 !!! DEMO ADMIN ACCESS, NOT REAL AUTHENTICATION.
-!!! Every admin request must send X-Admin-Token equal to ADMIN_TOKEN from
-!!! shoplite/api/.env. It's one shared secret with no users, roles, or expiry.
+!!! Every admin request must send X-Admin-Token equal to ADMIN_TOKEN (the
+!!! API's .env on the VM, the root .env locally). It's one shared secret with
+!!! no users, roles, or expiry.
 
 Restocking ("receive a shipment", Phase 3) tops up low-stock products so
 simulated purchases don't slowly empty the store. A nightly GitHub Actions

@@ -28,7 +28,6 @@ always produces the same data.
 
 import argparse
 import importlib.util
-import os
 import random
 import sys
 from datetime import date, datetime, timedelta, timezone

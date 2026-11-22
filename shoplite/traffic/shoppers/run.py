@@ -32,7 +32,6 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from dataclasses import asdict, replace
-from pathlib import Path
 
 from playwright.async_api import Browser, Playwright, async_playwright
 

@@ -1,8 +1,8 @@
 "use client";
 // app/admin/page.js: admin sign-in, and links to the admin pages.
 //
-// DEMO ADMIN ACCESS, NOT REAL AUTHENTICATION: one shared token (ADMIN_TOKEN
-// in shoplite/api/.env). It's checked against the API before being kept, and
+// DEMO ADMIN ACCESS, NOT REAL AUTHENTICATION: one shared token (the API's
+// ADMIN_TOKEN: its .env on the VM, the root .env locally). It's checked against the API before being kept, and
 // kept only in this browser tab (sessionStorage), so closing the tab signs
 // the admin out. It's never in the storefront's code or configuration.
 //

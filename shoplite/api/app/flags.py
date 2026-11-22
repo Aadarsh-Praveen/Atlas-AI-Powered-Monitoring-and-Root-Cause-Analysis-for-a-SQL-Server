@@ -1,7 +1,8 @@
 """Feature flags: named behaviors switched on or off by configuration.
 
-A flag is turned on by listing its name in FEATURE_FLAGS in shoplite/api/.env
-(comma-separated). Everything not listed is off. Changing flags means
+A flag is turned on by listing its name in FEATURE_FLAGS (comma-separated):
+in the API's .env on the VM, locally in the root .env or a shoplite/api/.env
+override. Everything not listed is off. Changing flags means
 restarting the API; no code changes.
 
 Code checks a flag where behavior differs:

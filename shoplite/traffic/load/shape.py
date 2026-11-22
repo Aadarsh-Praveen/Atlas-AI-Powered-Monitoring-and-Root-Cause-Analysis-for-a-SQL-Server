@@ -31,7 +31,7 @@ Settings (environment variables):
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from locust import LoadTestShape
