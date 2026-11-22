@@ -34,6 +34,11 @@ services:
       ACCEPT_EULA: "Y"          # required by the image; you accept the licence
       MSSQL_PID: "Developer"    # edition: free, full-featured, not for production
       MSSQL_SA_PASSWORD: ${SA_PASSWORD:?SA_PASSWORD is not set. Copy .env.example to .env and fill it in.}
+      # Phase 4: run SQL Server Agent (jobs: backups, maintenance, refresh)
+      # inside the container, like the service on prod-sql-01. Changing this
+      # recreates the container on the next "docker compose up -d"; the data
+      # volume and the databases are kept.
+      MSSQL_AGENT_ENABLED: "true"
     ports:
       # host:container. Bound to 127.0.0.1 so only your Mac can connect,
       # not other devices on your network.

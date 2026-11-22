@@ -13,7 +13,7 @@ indexes defined here.
 | File | What it does |
 |---|---|
 | `001_create_database.sql` | Drops and recreates SalesDB; sets `SIMPLE` recovery and turns on Query Store |
-| `002_tables.sql` | Creates the `dbo` tables and the `vendor` schema with `vendor.supplier_prices` |
+| `002_tables.sql` | Creates the `dbo` tables and the `vendor` schema with `vendor.supplier_prices`. `seed.py` fills it with **placeholder** supplier rows; since Phase 4 the real rows come from the vendor ETL (`server/etl/`). After a local rebuild, re-run `server/etl/sql` (001, 002, 900) before the next ETL run. |
 | `003_indexes.sql` | Indexes for the queries the API runs, each commented with the query it serves |
 | `004_logins.sql` | Creates the `shoplite_app` login and user with least-privilege permissions |
 | `005_report_procedures.sql` | Stored procedures behind the admin sales and top-products reports |

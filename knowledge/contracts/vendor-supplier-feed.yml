@@ -1,0 +1,113 @@
+# knowledge/contracts/vendor-supplier-feed.yml
+#
+# The data contract between "the vendor" (a supplier network running its own
+# Postgres database) and ShopLite: exactly what ShopLite's nightly ETL
+# (server/etl/) depends on. The ETL validates the vendor database against this
+# file BEFORE loading anything. Any difference stops the load with a message
+# that names it (table, column, expected, found), and the run is recorded as
+# failed in SalesDB's ops.etl_runs.
+#
+# Why a contract: the vendor can change their database at any time (rename a
+# column, change a type, stop updating prices). Without a written contract the
+# ETL would load wrong data silently or crash somewhere confusing. With one,
+# the failure is immediate and explains itself, which is the evidence Atlas
+# needs when the vendor breaks something (a Phase 5 incident).
+#
+# Types are written the way Postgres reports them in
+# information_schema.columns.data_type, so the ETL compares them directly.
+#
+# Changing this contract: bump `version` (MAJOR for anything the ETL must
+# change for, MINOR for additions it can ignore), note the change below, and
+# update the ETL in the same commit.
+
+contract: vendor-supplier-feed
+version: 1.0.0
+owner:
+  vendor: Supplier network (vendor database on Neon; vendor-pg locally)
+  consumer: ShopLite (server/etl/, the shoplite_reader role)
+changelog:
+  - version: 1.0.0
+    date: 2026-11-21
+    change: First version (Phase 4).
+
+source:
+  engine: postgresql
+  schema: supply
+  login: shoplite_reader         # read-only; SELECT on these four tables only
+  tls: required                  # sslmode=require for the hosted vendor
+
+tables:
+  suppliers:
+    primary_key: [supplier_id]
+    unique: [[supplier_code], [name]]
+    columns:
+      supplier_id:   {type: integer, nullable: false}
+      supplier_code: {type: character varying, nullable: false, max_length: 10}
+      name:          {type: character varying, nullable: false, max_length: 100}
+      is_active:     {type: boolean, nullable: false}
+      updated_at:    {type: timestamp with time zone, nullable: false}
+
+  catalog_items:
+    primary_key: [catalog_item_id]
+    unique: [[supplier_id, supplier_sku]]
+    columns:
+      catalog_item_id: {type: integer, nullable: false}
+      supplier_id:     {type: integer, nullable: false, references: suppliers.supplier_id}
+      supplier_sku:    {type: character varying, nullable: false, max_length: 40}
+      shoplite_sku:    {type: character varying, nullable: false, max_length: 20, pattern: '^[A-Z]{2}-[0-9]{5}$'}
+      description:     {type: character varying, nullable: false, max_length: 200}
+      is_discontinued: {type: boolean, nullable: false}
+      discontinued_at: {type: timestamp with time zone, nullable: true}
+      updated_at:      {type: timestamp with time zone, nullable: false}
+
+  prices:
+    primary_key: [catalog_item_id]
+    columns:
+      catalog_item_id: {type: integer, nullable: false, references: catalog_items.catalog_item_id}
+      unit_cost:       {type: numeric, nullable: false, precision: 10, scale: 2, min: 0}
+      currency:        {type: character, nullable: false, allowed: [USD]}
+      updated_at:      {type: timestamp with time zone, nullable: false}
+
+  stock:
+    primary_key: [catalog_item_id]
+    columns:
+      catalog_item_id:    {type: integer, nullable: false, references: catalog_items.catalog_item_id}
+      quantity_available: {type: integer, nullable: false, min: 0}
+      updated_at:         {type: timestamp with time zone, nullable: false}
+
+# Extra columns in the vendor's tables are allowed (a MINOR change); missing
+# or changed columns are not.
+extra_columns: allowed
+
+volume:
+  # A feed this small means something went wrong upstream (a half-finished
+  # reload, a wrong database). Stop instead of discontinuing half the catalog.
+  min_rows:
+    suppliers: 3
+    catalog_items: 5000
+    prices: 5000
+    stock: 5000
+  # Every catalog item must have exactly one price and one stock row.
+  complete_join: [catalog_items, prices, stock]
+
+freshness:
+  # The vendor updates prices every day (vendor-day.yml, 12:00 UTC). If
+  # the newest price change is older than this, the feed is stale: load
+  # nothing rather than yesterday's prices as if they were today's.
+  table: prices
+  column: updated_at
+  max_age_hours: 36
+
+# How the feed lands in SalesDB (for the ETL and for people reading it).
+target:
+  database: SalesDB
+  table: vendor.supplier_prices
+  key: [supplier_name, supplier_sku]
+  mapping:
+    supplier_name:  suppliers.name
+    supplier_sku:   catalog_items.supplier_sku
+    product_id:     "dbo.products.product_id, looked up by catalog_items.shoplite_sku = dbo.products.sku"
+    unit_cost:      prices.unit_cost
+    supplier_stock: stock.quantity_available
+    is_discontinued: catalog_items.is_discontinued
+  unknown_skus: skip_and_count   # a shoplite_sku that isn't a ShopLite product is skipped and counted, not loaded

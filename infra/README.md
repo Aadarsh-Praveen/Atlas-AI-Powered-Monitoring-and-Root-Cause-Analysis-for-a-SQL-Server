@@ -17,6 +17,7 @@ Atlas resources here.
 | `modules/vm.bicep` | The VM, its network card, OS disk, and data disk. |
 | `modules/sql-vm.bicep` | SQL IaaS Agent registration: SQL authentication and local-only connectivity. |
 | `modules/auto-shutdown.bicep` | The daily shutdown schedule. |
+| `modules/storage.bicep` | Phase 4: the backup storage account, its private `sqlbackups` container, and the lifecycle rule that deletes backups after 14 days. |
 | `prod.parameters.example.json` | Placeholders for the non-secret values. Copy it to `prod.parameters.local.json` (Git ignores `*.local.json`). |
 | `github-oidc.md` | Phase 3: setting up GitHub Actions' passwordless sign-in to Azure (managed identity, federated credential, custom role on the VM only). |
 | `roles/shoplite-vm-operator.json` | The custom role that guide creates: read, instance view, start, and deallocate a VM, nothing else. |
@@ -38,6 +39,9 @@ Everything lands in `rg-shoplite-prod`, in one region, tagged `project=atlas`, `
 | Data disk | `datadisk-prod-sql-01-01` | 64 GB Standard SSD, left **raw**. `server/vm-setup/01-prepare-data-disk.ps1` formats it for SQL data, SQL logs, and app logs. |
 | SQL virtual machine | `prod-sql-01` | The SQL IaaS Agent registration: SQL authentication on, with your SQL admin login; connectivity **LOCAL** (SQL Server accepts connections from the VM only). |
 | Shutdown schedule | `shutdown-computevm-prod-sql-01` | Deallocates the VM daily at `shutdownTime` (UTC). Shown on the VM's **Auto-shutdown** page in the portal. |
+| Storage account (Phase 4) | `stshoplite<13 characters>` | Standard LRS, Hot tier, no public blob access, HTTPS and TLS 1.2 only. The name is derived from the resource group's ID: unique in Azure, the same on every redeploy. |
+| Blob container (Phase 4) | `sqlbackups` | Private. SQL Server writes its backups here with `BACKUP ... TO URL`, through a SAS limited to this container (`server/backups/`). |
+| Lifecycle rule (Phase 4) | `delete-old-backups` | Deletes backup files older than `backupRetentionDays` (14). Azure runs it about once a day. |
 
 **Port 1433 is closed three ways:** the NSG denies it first, SQL Server listens locally only, and
 Windows Firewall blocks it (Phase 2, B2).
@@ -207,6 +211,27 @@ differences. Examples:
 Some properties can't be changed in place. The image and the disk names are set at creation, and a
 disk can be enlarged but never shrunk. Run `what-if` first whenever you change a template.
 
+### Phase 4: adding the backup storage
+
+The storage module is part of `main.bicep`, so it's added by redeploying `main.bicep` (in the Phase 4
+maintenance window, `TRAFFIC_ENABLED=false`):
+
+1. **Rebuild `main.json`** if you deploy through the portal: `az bicep build --file infra/main.bicep`.
+   An old `main.json` doesn't contain the storage module.
+2. **Type the SAME two passwords** you use today when prompted (Windows admin, SQL admin). They're
+   required parameters of every deployment; a different value can reset the Windows administrator or
+   SQL admin password, and then the API's and the scripts' passwords no longer match.
+3. **`what-if` first.** Expect three resources to be **created** (storage account, container,
+   management policy) and the existing ones unchanged, apart from harmless noise Azure sometimes
+   shows on unchanged properties. If anything says **Delete** or would replace the VM or a disk,
+   stop and ask before deploying.
+4. **Deploy**, then read the two new outputs: `backupStorageAccountName` and `backupContainerUrl`.
+   The container URL (`https://<account>.blob.core.windows.net/sqlbackups`) is what the SAS and the SQL
+   credential use (`server/backups/README.md`).
+
+In the portal, the outputs are on the resource group's **Deployments** page → the latest deployment →
+**Outputs**.
+
 ## What keeps billing when the VM is deallocated
 
 Deallocating the VM (`az vm deallocate`) stops **compute** charges only. These resources keep billing
@@ -217,8 +242,15 @@ for as long as they exist, running or not:
 - **The static public IP:** a Standard static IP is billed hourly while it exists, even when nothing
   is using it. Keeping it is what keeps your DNS name and address stable.
 
+- **Backup storage (Phase 4):** billed per GB stored, plus a tiny amount per write. With 14 days of
+  compressed backups (daily full, one differential, log backups every 15 minutes) this stays at a few
+  GB: well under a dollar a month at Standard LRS Hot prices. The lifecycle rule keeps it from
+  growing; if the bill for storage ever grows, check that the rule exists and is enabled.
+
 Together these are a few dollars a month. To stop **all** charges, delete the resource group (below),
-which removes the disks and the IP too.
+which removes the disks, the IP, and the backups too. (Deleting the group deletes every backup in it:
+that's fine for this project, but it's why real companies keep backups in a separate subscription or
+region.)
 
 ## Tear everything down
 

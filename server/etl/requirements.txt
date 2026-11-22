@@ -1,0 +1,12 @@
+# Packages for the vendor ETL (server/etl/run_etl.py). It has its own virtual
+# environment, server/etl/.venv, so the SQL Agent job on prod-sql-01 runs a
+# known, minimal set of packages:
+#   python -m venv server/etl/.venv
+#   server/etl/.venv/bin/pip install -r server/etl/requirements.txt          (Mac)
+#   server\etl\.venv\Scripts\pip install -r server\etl\requirements.txt     (VM)
+# Ranges match vendor/ and shoplite/db/ so versions agree across the repo.
+
+psycopg[binary]>=3.2,<4   # Postgres (the vendor), read-only; "binary" bundles libpq, nothing else to install
+pyodbc>=5.2,<6            # SQL Server via Microsoft ODBC Driver 18 (installed separately)
+python-dotenv>=1.0,<2     # reads server/etl/.env
+PyYAML>=6.0,<7            # reads the data contract

@@ -1,0 +1,8 @@
+# vendor/requirements.txt: the vendor seed and daily activity scripts.
+#
+# psycopg 3 talks to Postgres (the "binary" extra bundles the client library,
+# so nothing else needs installing). The seed also imports ShopLite's product
+# generator (shoplite/db/seed.py), which needs ShopLite's database packages.
+
+psycopg[binary]>=3.2,<4
+-r ../shoplite/db/requirements.txt

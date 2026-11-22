@@ -1,0 +1,68 @@
+# .github/workflows/vendor-day.yml: the vendor's daily changes (prices drift,
+# stock moves, items added and discontinued) in the vendor's Postgres (Neon).
+#
+# Schedule: 12:00 UTC EVERY DAY, weekends included (8 AM Boston in summer,
+# 7 AM in winter). The vendor is an external business that keeps working
+# when ShopLite's VM is off, and daily updates keep the feed within the data
+# contract's 36-hour freshness rule even if a run is late or skipped. On
+# weekdays it runs an hour before the VM starts and two hours before
+# ShopLite's ETL (14:00 UTC). It talks only to Postgres, so it never needs
+# the VM.
+#
+# Sign-in: the VENDOR_ACTIVITY_URL secret, the vendor_activity role (read and
+# write vendor data only: no DELETE, no structure changes). The vendor admin
+# connection never leaves your Mac.
+#
+# Its own switch, VENDOR_ACTIVITY_ENABLED (repository variable): the vendor is
+# an external system, so ShopLite's TRAFFIC_ENABLED doesn't pause it. A missing
+# variable counts as enabled; set it to "false" to stop the vendor's changes
+# (for example, to keep the vendor data still while testing the ETL). If it
+# stays off for more than about a day and a half, ShopLite's ETL will refuse
+# the feed as stale (newest price change older than 36 hours; see the data
+# contract). That's the contract working, not a bug.
+
+name: Vendor day
+
+on:
+  schedule:
+    - cron: "0 12 * * *"         # every day: the vendor works weekends too
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: "Multiply every change (1 = a normal day)"
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vendor-day
+  cancel-in-progress: false
+
+jobs:
+  vendor-day:
+    # Enabled unless VENDOR_ACTIVITY_ENABLED is explicitly "false" (missing = on).
+    if: vars.VENDOR_ACTIVITY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Only psycopg is needed here (the seed's ShopLite generator isn't used).
+      - name: Install psycopg
+        run: pip install "psycopg[binary]>=3.2,<4"
+
+      - name: Run one vendor day
+        env:
+          VENDOR_ACTIVITY_URL: ${{ secrets.VENDOR_ACTIVITY_URL }}
+          SCALE: ${{ inputs.scale || '1' }}
+        run: |
+          if [ -z "$VENDOR_ACTIVITY_URL" ]; then
+            echo "::error::The VENDOR_ACTIVITY_URL secret isn't set (see vendor/README.md)."
+            exit 1
+          fi
+          python vendor/activity.py --scale "$SCALE"

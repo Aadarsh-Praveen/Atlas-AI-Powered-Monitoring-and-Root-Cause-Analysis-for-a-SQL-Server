@@ -16,6 +16,8 @@
 //                        2022, B2as_v2, UTC, OS disk + 64 GB data disk, boot diagnostics
 //   sql-vm.bicep         SQL IaaS Agent: SQL authentication, LOCAL connectivity
 //   auto-shutdown.bicep  daily deallocation at shutdownTime
+//   storage.bicep        Phase 4: storage account + private "sqlbackups"
+//                        container + lifecycle rule (delete after 14 days)
 //
 // Every resource gets the same tags, so cost and ownership are visible in
 // Cost Management and the portal.
@@ -63,6 +65,15 @@ param shutdownTime string = '0100'
 
 @description('Optional email warned 30 minutes before shutdown. Empty = no email.')
 param shutdownNotificationEmail string = ''
+
+@description('Backup storage account name (globally unique, 3-24 lowercase letters and digits). The default is derived from the resource group\'s ID: unique, and the same on every redeploy.')
+@minLength(3)
+@maxLength(24)
+param backupStorageAccountName string = take('stshoplite${uniqueString(resourceGroup().id)}', 24)
+
+@description('Days to keep backup files before the lifecycle rule deletes them.')
+@minValue(1)
+param backupRetentionDays int = 14
 
 // -----------------------------------------------------------------------------
 // Tags on every resource
@@ -128,6 +139,18 @@ module autoShutdown 'modules/auto-shutdown.bicep' = {
   }
 }
 
+// Phase 4: backup storage. Independent of the VM (no outputs passed between
+// them): the VM reaches it over HTTPS with a SAS, set up on the VM itself.
+module backupStorage 'modules/storage.bicep' = {
+  name: 'backup-storage'
+  params: {
+    location: location
+    tags: tags
+    storageAccountName: backupStorageAccountName
+    retentionDays: backupRetentionDays
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Outputs: printed when the deployment finishes.
 // -----------------------------------------------------------------------------
@@ -139,3 +162,9 @@ output healthUrl string = 'https://${network.outputs.fqdn}/health'
 
 @description('Name of the VM.')
 output vmName string = vm.outputs.vmName
+
+@description('Backup storage account name (for creating the SAS).')
+output backupStorageAccountName string = backupStorage.outputs.storageAccountName
+
+@description('Backup container URL: the SQL Server credential is named exactly this.')
+output backupContainerUrl string = backupStorage.outputs.containerUrl
