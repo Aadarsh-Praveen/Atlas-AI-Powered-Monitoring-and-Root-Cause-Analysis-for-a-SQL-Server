@@ -67,6 +67,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Start the VM
+        id: start
         if: steps.decide.outputs.action == 'start'
         run: az vm start --resource-group "$RESOURCE_GROUP" --name "$VM_NAME"
 
@@ -84,12 +85,26 @@ jobs:
 
       # Information only: the services start on their own after boot. This
       # shows how long until the API answers, and never fails the run.
+      #
+      # Runs exactly when the "Start the VM" step succeeded (manual or
+      # scheduled). The condition names a status function (!cancelled()) on
+      # purpose: an `if:` WITHOUT one gets an invisible `success() &&` in
+      # front, which would skip this step if any earlier step had failed. The
+      # API_URL check is inside the script, so a missing variable produces a
+      # clear message instead of a silent skip.
       - name: Wait for the API to come up
-        if: steps.decide.outputs.action == 'start' && vars.API_URL != ''
+        if: ${{ !cancelled() && steps.start.outcome == 'success' }}
         continue-on-error: true
+        env:
+          API_URL: ${{ vars.API_URL }}
         run: |
+          if [ -z "$API_URL" ]; then
+            echo "::warning::Repository variable API_URL is empty; can't check when the API is up."
+            echo "⚠️ API_URL not set: API readiness not checked." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           for i in $(seq 1 40); do
-            if curl -fsS --max-time 10 "${{ vars.API_URL }}/health" | grep -q '"status":"ok"'; then
+            if curl -fsS --max-time 10 "$API_URL/health" | grep -q '"status":"ok"'; then
               echo "API healthy after about $((i * 15)) seconds."
               echo "API healthy after about $((i * 15)) seconds." >> "$GITHUB_STEP_SUMMARY"
               exit 0
