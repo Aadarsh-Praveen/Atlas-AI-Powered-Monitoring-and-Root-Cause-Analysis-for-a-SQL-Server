@@ -1,14 +1,17 @@
 # ADX and Grafana setup (Phase 5, Part C2)
 
-The long-term history store and the dashboards. Neither needs the VM: you can do all of this from the
-Mac before production monitoring exists. Recent data and alerts stay in Log Analytics
-(`observability/azure-setup.md`); ADX keeps **12 months**, Grafana only **shows** (it stores nothing).
+The long-term history store and the dashboards. Neither needs the VM. Grafana does need the Log
+Analytics workspace, because it reaches ADX **through** it (step 5): `law-shoplite-prod` exists since
+2026-11-22 (`observability/azure-setup.md` step 1). Recent data and alerts stay in Log Analytics; ADX
+keeps **12 months**; Grafana only **shows** (it stores nothing).
 
 ```
 collector ──(app registration: ingestor)──▶ ADX free cluster, database shoplite (12 months)
                                                   ▲
-Grafana Cloud ──(app registration: read only)─────┤
-                                                  └──▶ also Log Analytics (recent data, alerts)
+                                                  │ adx("<cluster>/shoplite").<table>
+                                                  │ (runs as the caller: Viewer needed)
+Grafana Cloud ──(app registration: read only)──▶ Log Analytics law-shoplite-prod
+               ONE data source: Azure Monitor      (recent data, Application Insights, alerts)
 ```
 
 | What | Name | Notes |
@@ -16,8 +19,8 @@ Grafana Cloud ──(app registration: read only)─────┤
 | ADX free cluster | your choice, e.g. `shoplite` | One per account, free, no SLA; **the term is one year**, which Microsoft may renew (record the date in the runbook) |
 | ADX database | `shoplite` | 16 tables, 5 hourly rollups, 365-day retention (`observability/adx/001_shoplite_database.kql`) |
 | ADX database (test only) | `shoplite_dev` | For testing the collector's sign-in from the Mac without mixing test data into production history |
-| App registration | `shoplite-collector-adx` | The collector's identity for ADX: **ingestor** on `shoplite` (and `shoplite_dev`) only |
-| App registration | `shoplite-grafana-reader` | Grafana's identity: **viewer** on `shoplite`, **Log Analytics Reader** on `law-shoplite-prod`, **Monitoring Reader** on `prod-sql-01` (VM metrics), nothing else |
+| App registration | `app-shoplite-collector-adx` | The collector's identity for ADX: **ingestor** on `shoplite` (and `shoplite_dev`) only |
+| App registration | `app-shoplite-grafana` | Grafana's identity: **Viewer** on `shoplite` (and `shoplite_dev`, for testing), **Log Analytics Reader** on `law-shoplite-prod`, **Monitoring Reader** on `prod-sql-01` (VM metrics), nothing else |
 | Grafana Cloud stack | your choice, e.g. `shoplite` | Free tier |
 
 **Why app registrations:** the free cluster doesn't support managed identities, so the collector signs
@@ -67,7 +70,7 @@ first command's database name, `.alter-merge database shoplite_dev policy retent
 ## 3. The collector's app registration (ingestor)
 
 **3a. Create it.** Azure portal → **Microsoft Entra ID** (your Default Directory) → **App registrations**
-→ **New registration**: name `shoplite-collector-adx`, **Accounts in this organizational directory
+→ **New registration**: name `app-shoplite-collector-adx`, **Accounts in this organizational directory
 only**, no redirect URI → **Register**. From its **Overview**, note the **Application (client) ID** and
 the **Directory (tenant) ID**.
 
@@ -82,6 +85,11 @@ Note the expiry date.
 .add database shoplite_dev ingestors ('aadapp=<application-id>;<tenant-id>') 'shoplite collector (test)'
 .show database shoplite principals                  // the app is listed with role "Database Ingestor"
 ```
+
+**The free cluster shows the principal as the raw `aadapp=<application-id>;<tenant-id>` string**, not
+as `app-shoplite-collector-adx` (it doesn't look up display names). That's only how it's displayed:
+the grant worked if the row is there with role **Database Ingestor**. (Seen 2026-11-23; the test in
+3d is the real proof.)
 
 **Ingestor** can add data to the database's tables and nothing else: no queries, no schema changes.
 
@@ -120,46 +128,55 @@ together.
 
 ## 4. Grafana's read-only app registration
 
-**4a. Create it:** App registrations → **New registration** → `shoplite-grafana-reader`, single tenant
+**4a. Create it:** App registrations → **New registration** → `app-shoplite-grafana`, single tenant
 → **Register**. Note its application and tenant IDs. **Certificates & secrets** → new secret
 `grafana`, **12 months**; copy the Value; note the expiry.
 
-**4b. Read access to ADX** (ADX web UI, database `shoplite`):
+**4b. Read access to ADX** (ADX web UI), on `shoplite` and, for testing dashboards against test data,
+`shoplite_dev`:
 
 ```kusto
 .add database shoplite viewers ('aadapp=<grafana-application-id>;<tenant-id>') 'grafana (read only)'
+.add database shoplite_dev viewers ('aadapp=<grafana-application-id>;<tenant-id>') 'grafana (read only, test)'
 ```
 
-**Viewer** can query and see the schema; it can't add, change, or delete anything.
+**Viewer** can query and see the schema; it can't add, change, or delete anything. (The principal shows
+as the raw `aadapp=...` string here too: see 3c.)
+
+**Why Viewer on ADX *and* Log Analytics Reader (4c):** Grafana never talks to ADX directly. It sends a
+Log Analytics query containing `adx(...)`, and Log Analytics runs the ADX part **as the caller**: the
+same identity must be allowed into both. Observed 2026-11-22: a guest account with Log Analytics access
+but no ADX Viewer was refused until it was added as a viewer. (Microsoft's prerequisites list
+"`Microsoft.OperationalInsights/workspaces/query/*/read`", e.g. Log Analytics Reader, on the workspace
+and "View permissions to the tables you query in Azure Data Explorer".) **The same applies to you:**
+to run `adx()` queries yourself in the portal's Logs or in Grafana Explore under your own account, add
+it as a viewer too: `.add database shoplite viewers ('aaduser=<your sign-in>') 'owner'` (for a guest
+account, the object ID and tenant from Entra ID → Users: `'aaduser=<object-id>;<tenant-id>'`).
 
 **4c. Read access to Log Analytics**, on the workspace only: Azure portal → `law-shoplite-prod` →
 **Access control (IAM)** → **Add role assignment** → role **Log Analytics Reader** → **User, group, or
-service principal** → select `shoplite-grafana-reader` → **Review + assign**. (Read-only, and only this
+service principal** → select `app-shoplite-grafana` → **Review + assign**. (Read-only, and only this
 workspace: Grafana can't see or change anything else in the subscription.)
 
 **4d. Read access to the VM's metrics** (the CPU credits and CPU charts, added in B5): Virtual machines
 → `prod-sql-01` → **Access control (IAM)** → **Add role assignment** → role **Monitoring Reader** →
-select `shoplite-grafana-reader` → **Review + assign**. Monitoring Reader can read monitoring data and
+select `app-shoplite-grafana` → **Review + assign**. Monitoring Reader can read monitoring data and
 settings only: it can't start, stop, or change the VM.
 
-## 5. Grafana Cloud and its two data sources
+## 5. Grafana Cloud and its one data source
 
 **5a. The stack.** Sign up at **https://grafana.com** (free tier) and create a stack, e.g. `shoplite`,
 in a US region. Open it (`https://<stack>.grafana.net`).
 
-**5b. Azure Data Explorer data source.** **Connections** → **Add new connection** → search **Azure Data
-Explorer** → install the plugin if asked → **Add new data source**:
+**Why not Grafana's Azure Data Explorer data source:** it's an **Enterprise plugin**, available only on
+Grafana Cloud Pro/Advanced or Grafana Enterprise. It works during the 14-day trial, then stops. Don't
+add it. ADX is read **through Log Analytics** instead, with cross-service queries
+(`adx("<cluster URI>/shoplite").<table>`), using the free Azure Monitor data source below. Tested
+2026-11-22: in Explore, `adx("<cluster URI>/shoplite_dev").CollectorHeartbeat_CL` with
+`law-shoplite-prod` as the resource returned the test heartbeat. What to know about `adx()` (the time
+filter isn't passed to ADX, case-sensitive database names, limits): `observability/grafana/README.md`.
 
-| Field | Value |
-|---|---|
-| Name | `ADX shoplite` |
-| Cluster URL | the **Cluster URI** from step 1 (not the ingestion URI) |
-| Authentication | **App Registration**: tenant ID, client ID, client secret of `shoplite-grafana-reader` |
-| Default database | `shoplite` |
-
-**Save & test** → "Success".
-
-**5c. Azure Monitor data source.** **Connections** → **Data sources** → **Add data source** → **Azure
+**5b. Azure Monitor data source.** **Connections** → **Data sources** → **Add data source** → **Azure
 Monitor**:
 
 | Field | Value |
@@ -170,20 +187,27 @@ Monitor**:
 
 **Save & test** → it lists the subscription; "Successfully queried" for Log Analytics.
 
-**5d. Check both with one query each** (**Explore**):
-- `ADX shoplite`: `CollectorHeartbeat_CL | summarize count() by bin(TimeGenerated, 1h)` (data once the
-  production collector sends; until then the table exists and is empty).
-- `Azure Monitor shoplite` → **Logs** → resource `law-shoplite-prod`: `Heartbeat | take 5`.
+**5c. Check it with two queries** (**Explore** → `Azure Monitor shoplite` → **Logs** → resource
+`law-shoplite-prod`):
+- Log Analytics itself: `Heartbeat | take 5`.
+- ADX through it (replace the cluster URI; `shoplite_dev` while only test data exists):
+  `adx("https://<cluster>.<region>.kusto.windows.net/shoplite").CollectorHeartbeat_CL | where TimeGenerated > ago(7d) | take 5`.
+  An error naming ADX permissions = step 4b is missing for the identity running the query.
 
-The dashboards come in B5 (as JSON in `observability/grafana/`), using these two data source names.
-Grafana stores the client secret encrypted; it isn't in the repo or in any dashboard JSON.
+The dashboards use this one data source: `observability/tools/make_dashboards.py` writes them, with your
+workspace, subscription, and cluster (`observability/grafana/README.md`). Grafana stores the client
+secret encrypted; it isn't in the repo or in any dashboard JSON.
+
+**Fallback:** if cross-service queries ever stop working, ADX's own **dashboards** (ADX web UI →
+**Dashboards**, free) read the same tables directly; `observability/grafana/README.md` says how to reuse
+the panels' queries there.
 
 ## 6. Checklist
 
 - [ ] ADX free cluster created; cluster URI and ingestion URI noted; one-year term date recorded
 - [ ] `shoplite`: 16 tables, 5 healthy materialized views, 365-day retention
 - [ ] `shoplite_dev`: 16 tables, 7-day retention
-- [ ] `shoplite-collector-adx`: ingestor on both databases; secret saved; expiry noted
+- [ ] `app-shoplite-collector-adx`: ingestor on both databases; secret saved; expiry noted
 - [ ] Local test against `shoplite_dev`: rows arrived, no ingestion failures
-- [ ] `shoplite-grafana-reader`: viewer on `shoplite`, Log Analytics Reader on the workspace, Monitoring Reader on `prod-sql-01` (nothing else); secret saved; expiry noted
-- [ ] Grafana stack with `ADX shoplite` and `Azure Monitor shoplite`, both tested
+- [ ] `app-shoplite-grafana`: Viewer on `shoplite` (and `shoplite_dev`), Log Analytics Reader on the workspace, Monitoring Reader on `prod-sql-01` (nothing else); secret saved; expiry noted
+- [ ] Grafana stack with **only** `Azure Monitor shoplite` (no ADX data source: Enterprise plugin); `Heartbeat` and an `adx(...)` query both work in Explore

@@ -42,6 +42,10 @@ DCEs, DCRs, custom tables, the agent, and the managed identity cost nothing them
 
 ## 1. Log Analytics workspace
 
+> **Done 2026-11-22:** `law-shoplite-prod` created as below, **31-day retention**, **0.5 GB/day daily
+> cap**. Kept here as the record of how (and to recreate it). Grafana uses it from the start: it reaches
+> ADX through it (`observability/adx-grafana-setup.md` step 5).
+
 Portal search: **Log Analytics workspaces** → **Create**.
 
 | Field | Value |

@@ -42,8 +42,8 @@ the vendor ETL, and the ReportingDB refreshes (sections 13–17).
 | Backup storage | Azure, `rg-shoplite-prod` | Storage account `stshoplite…` (Standard LRS), private container **`sqlbackups`**, lifecycle rule deleting backups after **14 days**. SQL Server writes to it with a SAS credential (section 14). Defined in `infra/modules/storage.bicep`. |
 | Monitoring collector (Phase 5) | VM, service `shoplite-collector` | Python, runs as `NT AUTHORITY\LocalService`, every minute: SQL Server internals and operations to Log Analytics and ADX, plus a heartbeat (section 21). Code in `C:\atlas\server\collector`; state and buffer in `F:\collector`. Not a SQL Agent job, and not dependent on SQL Server: it keeps reporting when SQL Server is down. |
 | Azure Monitor Agent (Phase 5) | VM, extension `AzureMonitorWindowsAgent` | Performance counters and Windows event logs (including SQL Server's entries in the Application log) to Log Analytics, per the rule `dcr-shoplite-vm` (section 19). |
-| Monitoring in Azure (Phase 5) | Azure, `rg-shoplite-prod` | Workspace `law-shoplite-prod`, Application Insights `appi-shoplite-prod`, endpoint `dce-shoplite-prod`, rules `dcr-shoplite-sql`/`-ops`/`-vm`, action group `ag-shoplite-email`, 19 alert rules, the suppression rule (sections 19–20). Created by hand from `observability/azure-setup.md`. |
-| History and dashboards (Phase 5) | ADX free cluster; Grafana Cloud (free) | ADX database `shoplite`: the collector's tables for 12 months. Grafana: five dashboards reading ADX and Log Analytics (section 22). Outside Azure's resource group. |
+| Monitoring in Azure (Phase 5) | Azure, `rg-shoplite-prod` | Workspace `law-shoplite-prod` (created 2026-11-22; 31-day retention, 0.5 GB/day daily cap), Application Insights `appi-shoplite-prod`, endpoint `dce-shoplite-prod`, rules `dcr-shoplite-sql`/`-ops`/`-vm`, action group `ag-shoplite-email`, 19 alert rules, the suppression rule (sections 19–20). Created by hand from `observability/azure-setup.md`. |
+| History and dashboards (Phase 5) | ADX free cluster; Grafana Cloud (free) | ADX database `shoplite`: the collector's tables for 12 months. Grafana: five dashboards with **one data source** (Azure Monitor), reading Log Analytics directly and ADX **through** it with `adx()` (section 22). Outside Azure's resource group. |
 | Vendor database | Neon (free managed Postgres), US East | "The vendor": an outside supplier network's Postgres, schema `supply`. ShopLite reads it with the read-only `shoplite_reader` login (TLS required); it changes every day through `vendor-day.yml`. Not in Azure, and not ShopLite's to change (section 15). |
 
 ## 2. Ports
@@ -74,8 +74,9 @@ Secret **values** are in the owner's password manager, never in Git or in this d
 | `reporting_reader` role | Nobody yet | Read-only on ReportingDB's reports. Grafana's and Atlas's logins join it later. |
 | `shoplite_monitor` (Phase 5) | The collector | Read-only: `VIEW SERVER PERFORMANCE STATE`, `VIEW DATABASE STATE` in SalesDB, ReportingDB, DBA, msdb, `SELECT` on msdb job and backup history and on the four operational tables. No business data, no writes. Password in `C:\atlas\server\collector\.env` (`SQL_PASSWORD`), identical to the value given to `server/collector/sql/001_monitor_login.sql`. |
 | prod-sql-01's managed identity (Phase 5) | The collector, to Log Analytics | System-assigned; **Monitoring Metrics Publisher** on `dcr-shoplite-sql` and `dcr-shoplite-ops` only. No secret anywhere. |
-| `shoplite-collector-adx` app registration (Phase 5) | The collector, to ADX | ADX **ingestor** on `shoplite` (and `shoplite_dev`). Secret in the collector's `.env` (`ADX_APP_SECRET`). **Secret expires: _(fill in)_.** |
-| `shoplite-grafana-reader` app registration (Phase 5) | Grafana Cloud | ADX **viewer** on `shoplite`, **Log Analytics Reader** on `law-shoplite-prod`, **Monitoring Reader** on `prod-sql-01`. Secret stored in Grafana's data sources. **Secret expires: _(fill in)_.** |
+| `app-shoplite-collector-adx` app registration (Phase 5) | The collector, to ADX | ADX **ingestor** on `shoplite` (and `shoplite_dev`). Secret in the collector's `.env` (`ADX_APP_SECRET`). **Secret expires: _(fill in)_.** ADX lists it as the raw `aadapp=…` string (normal on the free cluster). |
+| `app-shoplite-grafana` app registration (Phase 5) | Grafana Cloud | ADX **Viewer** on `shoplite` and `shoplite_dev`, **Log Analytics Reader** on `law-shoplite-prod`, **Monitoring Reader** on `prod-sql-01`. **Both** the first two are needed: Log Analytics runs `adx()` as the caller. Secret stored in Grafana's one data source. **Secret expires: _(fill in)_.** |
+| The Logic Apps' identities (Phase 5) | `logic-shoplite-vm-start`, `logic-shoplite-vm-deallocate` | System-assigned; **ShopLite VM Operator** on `prod-sql-01` only (section 4). No secret anywhere. |
 | Application Insights connection string (Phase 5) | The API | `APPLICATIONINSIGHTS_CONNECTION_STRING` in the API `.env`. Lets anyone holding it send data into `appi-shoplite-prod`: treated as a secret. |
 
 The `.env` files on the VM are readable only by Administrators and SYSTEM, plus one service account
@@ -367,17 +368,18 @@ edits (`USE [DBA]`, `@CreateJobs = 'N'`), run it, and note the new version here.
 Installed version: _(fill in after installing)_.
 
 **Rotate the collector's ADX secret (before it expires; Phase 5):** Entra ID → App registrations →
-`shoplite-collector-adx` → Certificates & secrets → New client secret (12 months) → put its Value in
+`app-shoplite-collector-adx` → Certificates & secrets → New client secret (12 months) → put its Value in
 `C:\atlas\server\collector\.env` (`ADX_APP_SECRET`) → `Restart-Service shoplite-collector` → check the
 heartbeat's `AdxOk` → delete the old secret. Update the expiry in section 3.
 
-**Rotate Grafana's secret:** the same for `shoplite-grafana-reader`, then paste the new Value into both
-Grafana data sources (`ADX shoplite`, `Azure Monitor shoplite`) → Save & test.
+**Rotate Grafana's secret:** the same for `app-shoplite-grafana`, then paste the new Value into
+Grafana's one data source (`Azure Monitor shoplite`) → Save & test.
 
 **Change a collected table, an alert, or a dashboard (Phase 5):** tables: `observability/schema.yml`
 first, then the collector, `make_table_files.py`, the ADX script, and the Log Analytics table (add the
 column in the portal). Alerts: the rule's file in `observability/alerts/` and the rule in the portal, in
-the same sitting. Dashboards: `observability/tools/make_dashboards.py`, regenerate, re-import.
+the same sitting. Dashboards: `observability/tools/make_dashboards.py` (the only source; nothing
+generated is committed), run it, re-import `observability/grafana/local/`.
 
 ## 11. Rules for production
 
@@ -794,15 +796,15 @@ their session.
  VM ──────────▶ Azure Monitor Agent ─────────────┤                                                    (section 20)
  API ─────────▶ Application Insights ────────────┘
                                                  └──▶ ADX free cluster, database shoplite (12 months)
-                                                                │
-                              Grafana Cloud ◀───────────────────┴── also Log Analytics  (section 22)
+                                                                ▲ adx() (as the caller)
+                              Grafana Cloud ──▶ Log Analytics ──┘   one data source: Azure Monitor (section 22)
 ```
 
 | Store | Holds | For |
 |---|---|---|
 | **Log Analytics** `law-shoplite-prod` | The collector's 16 `_CL` tables, the agent's `Perf`, `Event`, `Heartbeat`, Application Insights' `AppRequests`, `AppDependencies`, `AppExceptions`. **31 days.** | Alerts, "right now" questions |
 | **ADX** database `shoplite` | The collector's 16 tables (same names and columns) and 5 hourly rollups. **12 months.** No SLA: never used for alerts. | History, trends, later forecasts |
-| **Grafana Cloud** | Nothing (it only queries the two above) | Dashboards |
+| **Grafana Cloud** | Nothing. One data source (Azure Monitor): it queries Log Analytics, and ADX through Log Analytics' `adx()` | Dashboards |
 
 **The collector's tables** are defined in `observability/schema.yml` (columns, types, frequency): waits,
 performance counters, sessions, blocking chains, Extended Events, database sizes and backup ages, file
@@ -895,8 +897,21 @@ CollectorHeartbeat_CL
 ## 22. Dashboards (Phase 5)
 
 Grafana Cloud: **_(fill in the stack URL, https://<stack>.grafana.net)_**, folder **ShopLite**. Read-only
-identity; it stores nothing. Defined as code in `observability/tools/make_dashboards.py`; the JSON in
-`observability/grafana/` is generated from it (README there: import, variables, troubleshooting).
+identity; it stores nothing. Defined as code in `observability/tools/make_dashboards.py`, the only
+source: it writes import-ready JSON into the git-ignored `observability/grafana/local/` with the
+workspace, subscription, and cluster from the root `.env` (`GRAFANA_*`); none is committed
+(`observability/grafana/README.md`: import, variables, troubleshooting).
+
+**One data source, `Azure Monitor shoplite`.** History panels query ADX **through Log Analytics**:
+`adx("<cluster URI>/<database>").<table>`, with the cluster and database as dashboard variables.
+Grafana's own Azure Data Explorer data source is an **Enterprise plugin** (Pro/Advanced or Enterprise),
+so it would stop working when the trial ends. Requirements: `app-shoplite-grafana` has **Log Analytics
+Reader** on the workspace **and** ADX **Viewer** on the database (Log Analytics runs the ADX part as the
+caller). The time filter isn't passed to ADX, so every ADX query filters `TimeGenerated` itself.
+
+**If ADX panels error while Log Analytics panels work:** run one `adx(...)` query in Explore. If it fails
+there but works in the ADX web UI, cross-service queries are the problem: use ADX's own **dashboards**
+(ADX web UI → Dashboards, free) as the fallback; the README says how to reuse the panels' queries.
 
 | Dashboard | Open it to answer |
 |---|---|

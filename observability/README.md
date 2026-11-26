@@ -15,7 +15,7 @@ This page is a map. The steps themselves are in the guides it links to.
 | [`tables/`](tables/) | **Generated** from `schema.yml`: one sample `.json` per custom table and `transformations.kql`, for the portal's "New custom log (DCR-based)" wizard |
 | [`adx/001_shoplite_database.kql`](adx/001_shoplite_database.kql) | The ADX `shoplite` database: the same tables, ingestion mappings, retention, and the hourly rollups. Run in the ADX web UI. |
 | [`azure-setup.md`](azure-setup.md) | Guide: Log Analytics, Application Insights, the data collection endpoint and rules, the custom tables, the VM's managed identity, the Azure Monitor Agent, cost settings |
-| [`adx-grafana-setup.md`](adx-grafana-setup.md) | Guide: the free ADX cluster, the two app registrations, Grafana Cloud and its data sources |
+| [`adx-grafana-setup.md`](adx-grafana-setup.md) | Guide: the free ADX cluster, the two app registrations, Grafana Cloud and its one data source (ADX through Log Analytics' `adx()`) |
 | [`alerts/`](alerts/) | One file per alert rule (query, threshold, frequency, severity, behaviour outside business hours), plus the action group and the suppression rule. [`alerts/README.md`](alerts/README.md) has the list and the creation order. |
 | [`grafana/`](grafana/) | [`grafana/README.md`](grafana/README.md): the dashboards, importing and reading them. The JSON itself isn't committed: the generator writes it into git-ignored `grafana/local/` (or `grafana/placeholders/`). |
 | [`test-alert.md`](test-alert.md) | The end-to-end alert test: an email must arrive |
@@ -37,16 +37,20 @@ This follows Part C of the Phase 5 plan.
 
 1. **Local first.** Run the collector against local SQL Server (`server/collector/README.md`). No
    Azure is needed yet.
-2. **ADX and Grafana** ([`adx-grafana-setup.md`](adx-grafana-setup.md)). This doesn't need the VM, and
+2. **The Log Analytics workspace** ([`azure-setup.md`](azure-setup.md) step 1; done 2026-11-22:
+   `law-shoplite-prod`, 31 days, 0.5 GB/day cap). Grafana needs it, because it reads ADX **through**
+   Log Analytics (`adx()`): Grafana's ADX data source is an Enterprise plugin.
+3. **ADX and Grafana** ([`adx-grafana-setup.md`](adx-grafana-setup.md)). This doesn't need the VM, and
    it uses `adx/001_shoplite_database.kql`.
-3. **Azure Monitor** ([`azure-setup.md`](azure-setup.md)). It uses `tables/`, and steps 5–8 need the VM
-   running. It ends with the collector service on the VM sending data (`server/collector/README.md`,
+4. **The rest of Azure Monitor** ([`azure-setup.md`](azure-setup.md) steps 2–10). It uses `tables/`,
+   and steps 5–8 need the VM running. It ends with the collector service on the VM sending data (`server/collector/README.md`,
    "On prod-sql-01").
-4. **Alerts** ([`alerts/README.md`](alerts/README.md)): the action group, then the suppression rule,
+5. **Alerts** ([`alerts/README.md`](alerts/README.md)): the action group, then the suppression rule,
    then each rule, in the order given there.
-5. **Dashboards** ([`grafana/README.md`](grafana/README.md)): import the JSON files.
-6. **Test alert** ([`test-alert.md`](test-alert.md)).
-7. **First game day:** `incidents/README.md`.
+6. **Dashboards** ([`grafana/README.md`](grafana/README.md)): generate them
+   (`observability/tools/make_dashboards.py`) and import `grafana/local/`.
+7. **Test alert** ([`test-alert.md`](test-alert.md)).
+8. **First game day:** `incidents/README.md`.
 
 Operating it all afterwards (what each alert means, first checks, costs): the production runbook,
 `knowledge/runbooks/shoplite-production.md`, sections 19–22.
