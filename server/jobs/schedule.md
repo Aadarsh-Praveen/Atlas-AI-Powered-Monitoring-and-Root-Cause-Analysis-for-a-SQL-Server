@@ -1,7 +1,8 @@
 # ShopLite production schedule
 
-Everything that runs on its own, in one place: SQL Agent jobs on prod-sql-01 (`server/jobs/sql/040_jobs.sql`)
-and GitHub Actions workflows (`.github/workflows/`). All schedules are defined in **UTC**; Boston is
+Everything that runs on its own, in one place: SQL Agent jobs on prod-sql-01 (`server/jobs/sql/040_jobs.sql`),
+GitHub Actions workflows (`.github/workflows/`), and the two Azure Logic Apps that start and stop the
+VM (`infra/vm-schedule-logic-apps.md`). All schedules are defined in **UTC**; Boston is
 UTC−4 in summer (EDT, March to November) and UTC−5 in winter (EST).
 
 The VM runs **13:00–23:00 UTC, Monday to Friday**. Nothing is scheduled outside that window except the
@@ -11,7 +12,7 @@ is off simply never runs, with no error anywhere, so none is.
 | UTC | Boston summer | Boston winter | Days | What | Where |
 |---|---|---|---|---|---|
 | 12:00 | 8:00 AM | 7:00 AM | **every day** | Vendor day: prices, stock, catalog change | GitHub `vendor-day.yml` (own switch `VENDOR_ACTIVITY_ENABLED`) |
-| 13:00 | 9:00 AM | 8:00 AM | Mon–Fri | **VM starts**; SQL Agent and the XE session start with it | GitHub `vm-schedule.yml` |
+| 13:00 | 9:00 AM | 8:00 AM | Mon–Fri | **VM starts**; SQL Agent and the XE session start with it | Azure Logic App `logic-shoplite-vm-start` (temporarily also GitHub `vm-schedule.yml`, until the Logic Apps are verified) |
 | :10, :30, :50, 13:10–22:50 | 9:10 AM–6:50 PM | 8:10 AM–5:50 PM | Mon–Fri | Playwright shoppers, 5 minutes | GitHub `shoppers.yml` |
 | every 15 min, 13:15–22:45 | 9:15 AM–6:45 PM | 8:15 AM–5:45 PM | Mon–Fri | SalesDB **log backup** | Agent: Backup SalesDB LOG |
 | :35, 13:35–22:35 | 9:35 AM–6:35 PM | 8:35 AM–5:35 PM | Mon–Fri | Locust load, 10 minutes | GitHub `load.yml` |
@@ -28,11 +29,15 @@ is off simply never runs, with no error anywhere, so none is.
 | 22:30 | 6:30 PM | 5:30 PM | Mon–Fri | Restock (receive a shipment) | GitHub `restock.yml` |
 | 22:35 | 6:35 PM | 5:35 PM | Mon–Fri | Trim backup history, job history, CommandLog (30 days) | Agent: History cleanup |
 | 22:50 | 6:50 PM | 5:50 PM | Mon–Fri | SalesDB **final log backup** of the day | Agent: Backup SalesDB LOG |
-| 23:00 | 7:00 PM | 6:00 PM | Mon–Fri | **VM deallocates** | GitHub `vm-schedule.yml` |
-| 04:00 | 12:00 AM | 11:00 PM | every day | Safety-net shutdown if the 23:00 run failed | Azure auto-shutdown |
+| 23:00 | 7:00 PM | 6:00 PM | Mon–Fri | **VM deallocates** | Azure Logic App `logic-shoplite-vm-deallocate` (temporarily also GitHub `vm-schedule.yml`) |
+| 04:00 | 12:00 AM | 11:00 PM | every day | Safety-net shutdown if the 23:00 deallocate failed | Azure auto-shutdown |
 
 ## Why this order
 
+- **The VM's hours are in Azure, not GitHub:** GitHub's scheduler can be hours late or skip runs (on
+  2026-11-23 the 13:00 start arrived at 00:30 the next day). Traffic, restock, and the vendor stay on
+  GitHub schedules: a late or missing run there costs some synthetic traffic, not a VM running all night
+  or off all day.
 - **Vendor 12:00 → ETL 14:00 → ReportingDB 14:30:** each step uses the previous one's output, with a
   buffer for a slow start (GitHub can start scheduled runs several minutes late).
 - **Restock 22:30, then log backups 22:45 and 22:50:** the restock's changes are in Blob Storage before

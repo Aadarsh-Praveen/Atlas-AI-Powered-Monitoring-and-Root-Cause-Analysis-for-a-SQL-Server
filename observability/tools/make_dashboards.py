@@ -1,26 +1,51 @@
-"""Generates the Grafana dashboards (observability/grafana/*.json) from the
-compact definitions below: dashboards as code.
+"""Generates the Grafana dashboards from the compact definitions below:
+dashboards as code. THIS FILE is the source of truth; the JSON it writes is
+never committed (git-ignored), so there's only ever one set to import.
 
 Writing Grafana's JSON by hand means hundreds of lines of boilerplate per
 dashboard (panel positions, data source blocks, field settings), easy to break
 and hard to review. Here each panel is one line or two: a title, a data
 source, a KQL query, a unit. Change a panel here, re-run, re-import.
 
-    python observability/tools/make_dashboards.py      (from the repo root, any Python 3)
+    python observability/tools/make_dashboards.py
+        import-ready dashboards in observability/grafana/local/<name>.json,
+        with YOUR values as the variable defaults, read from the root .env
+        (GRAFANA_* variables; run it in the root .venv). Import these.
+    python observability/tools/make_dashboards.py --placeholders
+        for anyone without a .env: observability/grafana/placeholders/
+        <name>.placeholders.json, variables left as placeholders to fill in
+        after import. Reads no .env; any Python 3. The different file names
+        are on purpose: Grafana's file picker shows only the name.
 
-Data sources, chosen per panel:
-  ADX ("History")          the collector's tables, for the selected time range;
+ONE data source for everything: Grafana's free Azure Monitor data source.
+Grafana's Azure Data Explorer data source is an Enterprise plugin (Grafana
+Cloud Pro/Advanced or Enterprise only): it stops working when a trial ends.
+So ADX is reached THROUGH Log Analytics, with a cross-service query:
+
+    adx("<cluster URI>/<database>").SqlWaitStats_CL | where ...
+
+Log Analytics passes the caller's identity on to ADX, so Grafana's app
+registration needs Log Analytics Reader on the workspace AND Viewer on the
+ADX database (observability/adx-grafana-setup.md).
+
+What each panel reads, chosen per panel:
+  ADX history (adx())      the collector's tables, for the selected time range;
                            months of history; ingestion lags about 5 minutes
-  Log Analytics ("Now")    near-real-time collector data, and what only lives
+  Log Analytics            near-real-time collector data, and what only lives
                            there: Application Insights (AppRequests, ...) and
                            the agent's Perf, Event, Heartbeat
   Azure metrics            the VM's platform metrics (CPU credits, CPU)
 
-Every dashboard has the same variables, so no data source ID from your
-Grafana stack is written into the files:
-  adx, azmon      the two data sources (picked from a list after import)
+Every dashboard has the same variables, so nothing specific to your Grafana
+stack or Azure subscription is written into the files:
+  azmon           the Azure Monitor data source (picked from a list after import)
   workspace       the Log Analytics workspace's resource ID
   subscription    the Azure subscription ID (for the VM metrics)
+  adx_cluster     the ADX cluster URI, e.g. https://<name>.<region>.kusto.windows.net
+  adx_database    the ADX database: shoplite (shoplite_dev to test against test data)
+
+If cross-service queries ever stop working, ADX's own dashboards (in the ADX
+web UI) read the same tables directly: observability/grafana/README.md.
 
 KQL macros the data sources fill in: $__timeFilter(TimeGenerated) (the
 dashboard's time range) and $__timeInterval / $__interval (a bin size that
@@ -28,13 +53,18 @@ fits the panel's width). Event tables are de-duplicated by their unique_id
 (at-least-once delivery, observability/schema.yml).
 """
 
+import argparse
+import copy
 import json
+import re
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-OUT = REPO_ROOT / "observability" / "grafana"
+GRAFANA_DIR = REPO_ROOT / "observability" / "grafana"
+LOCAL_OUT = GRAFANA_DIR / "local"                  # default: your values (git-ignored)
+PLACEHOLDERS_OUT = GRAFANA_DIR / "placeholders"    # --placeholders (git-ignored too)
 
-ADX_TYPE = "grafana-azure-data-explorer-datasource"
 AZMON_TYPE = "grafana-azure-monitor-datasource"
 VM = {"resourceGroup": "rg-shoplite-prod", "resourceName": "prod-sql-01",
       "metricNamespace": "microsoft.compute/virtualmachines", "region": "northcentralus"}
@@ -43,10 +73,23 @@ VM = {"resourceGroup": "rg-shoplite-prod", "resourceName": "prod-sql-01",
 # -----------------------------------------------------------------------------
 # Targets (one query each)
 # -----------------------------------------------------------------------------
+# The ADX database, as Log Analytics' adx() function addresses it (both parts are variables).
+ADX_SOURCE = 'adx("${adx_cluster}/${adx_database}")'
+# A collector table name (they all end in _CL) not already preceded by "." (already wrapped).
+COLLECTOR_TABLE = re.compile(r"(?<![.\w])([A-Za-z][A-Za-z0-9]*_CL)\b")
+
+
 def adx(kql: str, table: bool = False) -> dict:
-    return {"refId": "A", "datasource": {"type": ADX_TYPE, "uid": "${adx}"}, "database": "shoplite",
-            "queryType": "KQL", "rawMode": True, "query": kql.strip(),
-            "resultFormat": "table" if table else "time_series"}
+    """A query on ADX's history, sent through Log Analytics: every collector
+    table is wrapped as adx("<cluster>/<database>").<table>. The panels below
+    stay written as plain KQL (SqlWaitStats_CL | ...), easy to read and to
+    paste into the ADX web UI; the wrapping happens here, so none is missed.
+
+    Every ADX query MUST filter time itself ($__timeFilter(TimeGenerated)):
+    "The Log Analytics Query API doesn't pass the time filter" to ADX
+    (Microsoft, "Correlate data in Azure Data Explorer ... with data in a Log
+    Analytics workspace"). Without it a panel would read all 12 months."""
+    return la(COLLECTOR_TABLE.sub(lambda m: f"{ADX_SOURCE}.{m.group(1)}", kql), table)
 
 
 def la(kql: str, table: bool = False) -> dict:
@@ -68,14 +111,15 @@ def metric(name: str, aggregation: str = "Average") -> dict:
 # Panels
 # -----------------------------------------------------------------------------
 def panel(kind: str, title: str, target: dict, width: int, height: int, unit: str = "short",
-          description: str = "", options: dict | None = None, thresholds: list | None = None) -> dict:
+          description: str = "", options: dict | None = None, thresholds: list | None = None,
+          overrides: list | None = None) -> dict:
     defaults = {"unit": unit}
     if thresholds:
         defaults["thresholds"] = {"mode": "absolute",
                                   "steps": [{"color": color, "value": value} for value, color in thresholds]}
         defaults["color"] = {"mode": "thresholds"}
     return {"type": kind, "title": title, "description": description, "datasource": target["datasource"],
-            "targets": [target], "fieldConfig": {"defaults": defaults, "overrides": []},
+            "targets": [target], "fieldConfig": {"defaults": defaults, "overrides": overrides or []},
             "options": options or {}, "_size": (width, height)}
 
 
@@ -92,16 +136,47 @@ def stat(title, target, unit="short", width=4, description="", thresholds=None):
     return panel("stat", title, target, width, 4, unit, description, options, thresholds)
 
 
-def table(title, target, width=24, height=8, description=""):
-    return panel("table", title, target, width, height, "short", description, {"showHeader": True})
+def table(title, target, width=24, height=8, description="", status_column=None):
+    """status_column: a column of outcomes (succeeded, failed, ...) to colour like everywhere else."""
+    overrides = [status_cells(status_column)] if status_column else None
+    return panel("table", title, target, width, height, "short", description, {"showHeader": True},
+                 overrides=overrides)
 
 
-def bars(title, target, unit="short", width=12, description=""):
-    """Stacked daily bars: a time series drawn as bars, one colour per series."""
+def bars(title, target, unit="short", width=12, description="", status_series=False):
+    """Stacked daily bars: a time series drawn as bars, one colour per series.
+    status_series: the series are outcomes; colour them by meaning (STATUS_COLORS)."""
     p = ts(title, target, unit, width, description)
     p["fieldConfig"]["defaults"]["custom"] = {"drawStyle": "bars", "fillOpacity": 80,
                                               "stacking": {"mode": "normal"}}
+    if status_series:
+        p["fieldConfig"]["overrides"] = status_series_colors()
     return p
+
+
+# -----------------------------------------------------------------------------
+# Status colours: the same meaning, the same colour, on every panel
+# -----------------------------------------------------------------------------
+# Without these, Grafana colours series from its palette in the order they
+# arrive, so "failed" can come out green. Values: observability/schema.yml.
+STATUS_COLORS = {"succeeded": "green", "failed": "red", "retry": "orange", "cancelled": "gray"}
+
+
+def status_series_colors() -> list[dict]:
+    """One override per outcome, matched by pattern: depending on the Grafana
+    version the series is named "failed", "Runs failed", or
+    "Runs {Outcome=failed}". (No outcome's name contains another's.)"""
+    return [{"matcher": {"id": "byRegexp", "options": f".*{status}.*"},
+             "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": color}}]}
+            for status, color in STATUS_COLORS.items()]
+
+
+def status_cells(column: str) -> dict:
+    """A table column whose cells are coloured by outcome."""
+    mapping = {status: {"color": color, "index": i} for i, (status, color) in enumerate(STATUS_COLORS.items())}
+    return {"matcher": {"id": "byName", "options": column},
+            "properties": [{"id": "mappings", "value": [{"type": "value", "options": mapping}]},
+                           {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}
 
 
 def layout(panels: list[dict]) -> list[dict]:
@@ -119,13 +194,16 @@ def layout(panels: list[dict]) -> list[dict]:
 
 
 VARIABLES = [
-    {"name": "adx", "label": "History (ADX)", "type": "datasource", "query": ADX_TYPE, "hide": 0},
-    {"name": "azmon", "label": "Now (Azure Monitor)", "type": "datasource", "query": AZMON_TYPE, "hide": 0},
+    {"name": "azmon", "label": "Azure Monitor", "type": "datasource", "query": AZMON_TYPE, "hide": 0},
     {"name": "workspace", "label": "Log Analytics workspace resource ID", "type": "textbox", "hide": 0,
      "query": "/subscriptions/<subscription-id>/resourceGroups/rg-shoplite-prod/providers/"
               "Microsoft.OperationalInsights/workspaces/law-shoplite-prod"},
     {"name": "subscription", "label": "Subscription ID", "type": "textbox", "hide": 0,
      "query": "<subscription-id>"},
+    {"name": "adx_cluster", "label": "ADX cluster URI", "type": "textbox", "hide": 0,
+     "query": "https://<cluster>.<region>.kusto.windows.net"},
+    {"name": "adx_database", "label": "ADX database", "type": "textbox", "hide": 0,
+     "query": "shoplite"},
 ]
 
 
@@ -191,14 +269,14 @@ def overview() -> dict:
         table("Failed SQL Agent jobs (last 24 h)", la("""
             SqlAgentJobRuns_CL | where TimeGenerated > ago(24h) and Outcome == "failed"
             | summarize arg_max(TimeGenerated, JobName, FailedStepName, FailedStepMessage) by HistoryId
-            | project TimeGenerated, JobName, FailedStepName, FailedStepMessage | order by TimeGenerated desc""",
-            table=True), height=6),
+            | project TimeGenerated, JobName, Outcome, FailedStepName, FailedStepMessage | order by TimeGenerated desc""",
+            table=True), height=6, status_column="Outcome"),
     ])
 
 
 def sql_server() -> dict:
     return dashboard("shoplite-sql-server", "ShopLite: SQL Server",
-                     "SQL Server internals over time (ADX history): waits, workload, sessions, blocking, "
+                     "SQL Server internals over time (ADX history, via Log Analytics): waits, workload, sessions, blocking, "
                      "deadlocks, top queries, logs, and file I/O.", [
         ts("Waits by type (seconds per interval, top 8)", adx("""
             let top = SqlWaitStats_CL | where $__timeFilter(TimeGenerated)
@@ -268,12 +346,12 @@ def sql_server() -> dict:
 def operations() -> dict:
     return dashboard("shoplite-operations", "ShopLite: Operations",
                      "Jobs, backups, restore tests, the vendor ETL, ReportingDB, maintenance, and the vendor "
-                     "(ADX history).", [
+                     "(ADX history, via Log Analytics).", [
         bars("Job runs per day by outcome", adx("""
             SqlAgentJobRuns_CL | where $__timeFilter(TimeGenerated)
             | summarize arg_max(TimeGenerated, *) by HistoryId
             | summarize Runs = count() by TimeGenerated = startofday(TimeGenerated), Outcome
-            | order by TimeGenerated asc""")),
+            | order by TimeGenerated asc"""), status_series=True),
         ts("Minutes since SalesDB's last backups", adx("""
             SqlDatabases_CL | where $__timeFilter(TimeGenerated) and DatabaseName == "SalesDB"
             | summarize Log = max(datetime_diff('minute', TimeGenerated, LastLogBackupAt)),
@@ -286,7 +364,7 @@ def operations() -> dict:
             SqlAgentJobRuns_CL | where $__timeFilter(TimeGenerated)
             | summarize arg_max(TimeGenerated, *) by HistoryId
             | project TimeGenerated, JobName, Outcome, DurationSeconds, FailedStepName, FailedStepMessage
-            | order by TimeGenerated desc | take 100""", table=True), height=10),
+            | order by TimeGenerated desc | take 100""", table=True), height=10, status_column="Outcome"),
         ts("Backup size written (MB) by type", adx("""
             SqlBackups_CL | where $__timeFilter(TimeGenerated) and DatabaseName == "SalesDB" and not(IsCopyOnly)
             | summarize arg_max(TimeGenerated, *) by BackupSetId
@@ -296,14 +374,14 @@ def operations() -> dict:
             DbaRestoreTests_CL | where $__timeFilter(TimeGenerated)
             | summarize arg_max(TimeGenerated, *) by RunId
             | project TimeGenerated, Status, RestoreSeconds, CheckdbSeconds, LogBackupsRestored, RestoredTo, ErrorMessage
-            | order by TimeGenerated desc""", table=True), width=12,
+            | order by TimeGenerated desc""", table=True), width=12, status_column="Status",
               description="RestoreSeconds is the measured recovery time (RTO)."),
         table("Vendor ETL runs", adx("""
             OpsEtlRuns_CL | where $__timeFilter(TimeGenerated)
             | summarize arg_max(TimeGenerated, *) by RunId
             | project TimeGenerated, Status, DurationSeconds, RowsRead, RowsInserted, RowsUpdated,
                       RowsDiscontinued, RowsSkipped, ErrorStage, ErrorMessage
-            | order by TimeGenerated desc""", table=True), width=12),
+            | order by TimeGenerated desc""", table=True), width=12, status_column="Status"),
         ts("Vendor: freshness (hours) and connect time (ms)", adx("""
             VendorFeed_CL | where $__timeFilter(TimeGenerated)
             | summarize FreshnessHours = max(FreshnessHours), ConnectMs = max(ConnectMs)
@@ -314,7 +392,7 @@ def operations() -> dict:
             OpsRefreshRuns_CL | where $__timeFilter(TimeGenerated)
             | summarize arg_max(TimeGenerated, *) by RunId
             | project TimeGenerated, Mode, Status, DurationSeconds, DaysRebuilt, RowsWritten, ErrorMessage
-            | order by TimeGenerated desc""", table=True), width=12),
+            | order by TimeGenerated desc""", table=True), width=12, status_column="Status"),
         bars("Maintenance time per day by command (minutes)", adx("""
             DbaCommandLog_CL | where $__timeFilter(TimeGenerated)
             | summarize arg_max(TimeGenerated, *) by CommandLogId
@@ -412,13 +490,75 @@ def vm() -> dict:
     ])
 
 
+# -----------------------------------------------------------------------------
+# The default run: import-ready copies with your values
+# -----------------------------------------------------------------------------
+# Dashboard variable -> (root .env variable, default if unset). None = required.
+LOCAL_VALUES = {
+    "azmon": ("GRAFANA_DATASOURCE", "Azure Monitor shoplite"),
+    "workspace": ("GRAFANA_WORKSPACE_ID", None),
+    "subscription": ("GRAFANA_SUBSCRIPTION_ID", None),
+    "adx_cluster": ("GRAFANA_ADX_CLUSTER_URI", None),
+    "adx_database": ("GRAFANA_ADX_DATABASE", "shoplite"),
+}
+
+
+def local_values(root_env: Path | None = None, environ=None) -> dict[str, str]:
+    """Your values for the variables: real environment, then the root .env
+    (layered, tools/envconfig.py). Exits naming every missing one: a half
+    filled copy would import and then show errors panel by panel."""
+    sys.path.insert(0, str(REPO_ROOT / "tools"))
+    from envconfig import ROOT_ENV, load_layers, setting
+    load_layers(root_env=root_env or ROOT_ENV, environ=environ)
+    values, missing = {}, []
+    for variable, (env_name, default) in LOCAL_VALUES.items():
+        value = (setting(env_name, default=default, environ=environ) or "").strip()
+        if value and "<" not in value and value != "replace-me":     # still .env.example's placeholder?
+            values[variable] = value
+        else:
+            missing.append(env_name)
+    if missing:
+        sys.exit(f"Set {', '.join(missing)} in the root .env (see .env.example), or run with --placeholders. "
+                 "Nothing written.")
+    return values
+
+
+def with_values(board: dict, values: dict[str, str]) -> dict:
+    """A copy of the dashboard whose variables default to your values."""
+    board = copy.deepcopy(board)
+    for variable in board["templating"]["list"]:
+        value = values.get(variable["name"])
+        if value is None:
+            continue
+        if variable["type"] == "textbox":
+            variable["query"] = value
+        variable["current"] = {"text": value, "value": value, "selected": True}
+    return board
+
+
+DASHBOARDS = (("overview", overview), ("sql-server", sql_server), ("operations", operations),
+              ("api", api), ("vm", vm))
+
+
 def main() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-    for name, build in (("overview", overview), ("sql-server", sql_server), ("operations", operations),
-                        ("api", api), ("vm", vm)):
+    parser = argparse.ArgumentParser(description="Generate the Grafana dashboards (import-ready, from the root .env)")
+    parser.add_argument("--placeholders", action="store_true",
+                        help="no .env: write <name>.placeholders.json to observability/grafana/placeholders/ instead")
+    args = parser.parse_args()
+
+    # Exactly one set per run, each in its own folder with its own file names.
+    if args.placeholders:
+        out, suffix, values = PLACEHOLDERS_OUT, ".placeholders.json", None
+    else:
+        out, suffix, values = LOCAL_OUT, ".json", local_values()     # fails before writing anything
+    out.mkdir(parents=True, exist_ok=True)
+    for name, build in DASHBOARDS:
         board = build()
-        (OUT / f"{name}.json").write_text(json.dumps(board, indent=2) + "\n", encoding="utf-8")
-        print(f"{name}.json: {len(board['panels'])} panels")
+        if values:
+            board = with_values(board, values)
+        path = out / f"{name}{suffix}"
+        path.write_text(json.dumps(board, indent=2) + "\n", encoding="utf-8")
+        print(f"{path.relative_to(REPO_ROOT)}: {len(board['panels'])} panels")
 
 
 if __name__ == "__main__":

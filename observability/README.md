@@ -17,18 +17,16 @@ This page is a map. The steps themselves are in the guides it links to.
 | [`azure-setup.md`](azure-setup.md) | Guide: Log Analytics, Application Insights, the data collection endpoint and rules, the custom tables, the VM's managed identity, the Azure Monitor Agent, cost settings |
 | [`adx-grafana-setup.md`](adx-grafana-setup.md) | Guide: the free ADX cluster, the two app registrations, Grafana Cloud and its data sources |
 | [`alerts/`](alerts/) | One file per alert rule (query, threshold, frequency, severity, behaviour outside business hours), plus the action group and the suppression rule. [`alerts/README.md`](alerts/README.md) has the list and the creation order. |
-| [`grafana/`](grafana/) | **Generated** dashboards (`*.json`) to import. [`grafana/README.md`](grafana/README.md) covers importing and reading them. |
+| [`grafana/`](grafana/) | [`grafana/README.md`](grafana/README.md): the dashboards, importing and reading them. The JSON itself isn't committed: the generator writes it into git-ignored `grafana/local/` (or `grafana/placeholders/`). |
 | [`test-alert.md`](test-alert.md) | The end-to-end alert test: an email must arrive |
 | [`tools/make_table_files.py`](tools/make_table_files.py) | Regenerates `tables/` from `schema.yml` |
-| [`tools/make_dashboards.py`](tools/make_dashboards.py) | Regenerates `grafana/*.json` from the panel definitions inside it |
+| [`tools/make_dashboards.py`](tools/make_dashboards.py) | **The dashboards' source of truth:** writes import-ready `grafana/local/<name>.json` with your values from the root `.env` (`--placeholders`: `grafana/placeholders/`, no `.env`) |
 
-**Generated files aren't edited by hand.** Change `schema.yml` (or the panel definitions in
-`make_dashboards.py`), re-run the tool from the repo root, and commit both:
-
-```bash
-python observability/tools/make_table_files.py
-python observability/tools/make_dashboards.py
-```
+**Generated files aren't edited by hand.**
+- **Tables:** change `schema.yml`, run `python observability/tools/make_table_files.py`, and commit
+  both (the `tables/` files are committed: the portal wizard needs them).
+- **Dashboards:** change the panel definitions in `make_dashboards.py`, run
+  `python observability/tools/make_dashboards.py`, and re-import. Only the generator is committed.
 
 A schema change also means changing the collector (its tests check every record against
 `schema.yml`), updating the ADX script, and updating the table in Log Analytics.

@@ -9,7 +9,8 @@ Everything goes into the existing resource group **`rg-shoplite-prod`**, region 
 (`northcentralus`), with the tags **`project=atlas`, `env=prod`, `app=shoplite`**, like Phase 2.
 
 **The VM must be running for steps 5–8** (the identity, the agent install, and the collector), so do
-those inside business hours, or start it by hand with `vm-schedule.yml`. Steps 1–4 don't need it.
+those inside business hours, or start it by hand with `vm-schedule.yml` (outside weekdays 12:30–21:00
+UTC tick `force_start`). Steps 1–4 don't need it.
 
 ## What you'll build
 

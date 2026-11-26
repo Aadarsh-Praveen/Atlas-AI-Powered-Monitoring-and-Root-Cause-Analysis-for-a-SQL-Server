@@ -1,7 +1,7 @@
 {
   "Name": "ShopLite VM Operator",
   "IsCustom": true,
-  "Description": "Start, deallocate, and read the state of a VM. Nothing else: no delete, resize, run-command, disks, networking, or data access. Assigned to the GitHub Actions managed identity on prod-sql-01 only (infra/github-oidc.md).",
+  "Description": "Start, deallocate, and read the state of a VM. Nothing else: no delete, resize, run-command, disks, networking, or data access. Assigned on prod-sql-01 only, to the GitHub Actions managed identity (infra/github-oidc.md) and to the two Logic Apps' system-assigned identities (infra/vm-schedule-logic-apps.md).",
   "Actions": [
     "Microsoft.Compute/virtualMachines/read",
     "Microsoft.Compute/virtualMachines/instanceView/read",

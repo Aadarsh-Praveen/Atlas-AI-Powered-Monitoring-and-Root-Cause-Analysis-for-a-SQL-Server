@@ -86,6 +86,16 @@ infra/main.json
 /docs/
 
 # ---------------------------------------------------------------------------
+# Grafana dashboards: generated, never committed
+# The source of truth is observability/tools/make_dashboards.py. Its default
+# run writes import-ready copies with your subscription, workspace, and cluster
+# (from the root .env) to local/; --placeholders writes *.placeholders.json for
+# anyone without a .env. Both are rebuilt in a second.
+# ---------------------------------------------------------------------------
+observability/grafana/local/
+observability/grafana/placeholders/
+
+# ---------------------------------------------------------------------------
 # macOS and editors
 # Per-machine files that mean nothing to anyone else.
 # ---------------------------------------------------------------------------

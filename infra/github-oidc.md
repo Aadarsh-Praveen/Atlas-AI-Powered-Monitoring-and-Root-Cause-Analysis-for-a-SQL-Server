@@ -1,6 +1,9 @@
 # GitHub Actions → Azure sign-in (OIDC), scoped to one VM
 
-`.github/workflows/vm-schedule.yml` starts and deallocates `prod-sql-01`. It signs in to Azure with
+`.github/workflows/vm-schedule.yml` starts and deallocates `prod-sql-01` **on demand** (maintenance; its
+time guard is in `.github/workflows/README.md`). The VM's **business hours** are run by two Azure Logic
+Apps (`infra/vm-schedule-logic-apps.md`), because GitHub's scheduler can be hours late; until those are
+verified the workflow also keeps its 13:00/23:00 schedule. It signs in to Azure with
 **OpenID Connect (OIDC)** through a **user-assigned managed identity**, so **no Azure password, key,
 or client secret is stored in GitHub**, and the identity can do exactly one thing: start, deallocate,
 and read **that one VM**.
@@ -163,8 +166,10 @@ variable `API_URL` is set (`vm-schedule` uses it to report when the API is up).
 
 1. **Actions → VM schedule → Run workflow**, `action: deallocate`. The run should be green, and its
    summary should say `prod-sql-01: deallocate → VM deallocated`.
-2. Run it again with `action: start`. The summary shows `VM running` and, a few minutes later, how
-   long the API took to answer `/health`.
+2. Run it again with `action: start`, **on a weekday between 12:30 and 21:00 UTC** (the time guard;
+   outside that window tick `force_start`, or the run is skipped, green, with the reason in its
+   summary). The summary shows `VM running` and, a few minutes later, how long the API took to answer
+   `/health`.
 3. If you disabled the workflow while waiting for this setup, **Enable workflow** now (see
    `.github/workflows/README.md`).
 
@@ -208,6 +213,10 @@ The subject identifies the repository and branch; it isn't a secret, so it's fin
 the log.
 
 ## Undo
+
+The Logic Apps (`infra/vm-schedule-logic-apps.md`) use the same role: **skip the
+`az role definition delete` line while they exist** (Azure refuses to delete a role that's still
+assigned anyway).
 
 ```bash
 az role assignment delete --assignee "$PRINCIPAL_ID" --role "ShopLite VM Operator" --scope "$VM_ID"

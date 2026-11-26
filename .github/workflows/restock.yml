@@ -5,7 +5,7 @@
 # Phase 4 moved it from 22:45: GitHub can start scheduled runs several
 # minutes late, and the restock's changes must land before SQL Server's
 # 22:45 and final 22:50 log backups, so they're in Blob Storage before
-# vm-schedule.yml deallocates the VM at 23:00 (server/jobs/schedule.md).
+# the VM is deallocated at 23:00 (server/jobs/schedule.md).
 #
 # Calls POST /api/admin/restock (API 1.1.0+): every product at or below its
 # reorder level is topped up to target_quantity (default 100), lowest stock

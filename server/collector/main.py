@@ -271,7 +271,11 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)sZ %(levelname)s %(name)s: %(message)s")
     logging.Formatter.converter = time.gmtime     # log times in UTC, like everything else
-    load_layers(COLLECTOR_DIR)                     # own .env, then the root .env; never overrides what's set
+    # The Azure SDKs (azure.core's HTTP logging policy, azure.identity, azure.monitor.ingestion,
+    # azure.kusto) log every request and response at INFO, which buries the collector's own lines.
+    # "azure" is the parent of all of them: warnings and errors still come through.
+    logging.getLogger("azure").setLevel(logging.WARNING)
+    load_layers(COLLECTOR_DIR)                    # own .env, then the root .env; never overrides what's set
 
     try:
         config = load_config()

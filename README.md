@@ -83,6 +83,10 @@ characters). A component's own `.env` is only needed **on the VM**, or to overri
 | `VENDOR_HOST`, `VENDOR_PORT` |  |  |  | ✓ | ✓ | ✓ | ✓ |  |
 | `ADMIN_TOKEN` |  |  | ✓ |  |  | ✓ |  | ✓ (as `SHOPLITE_ADMIN_TOKEN`) |
 | `STOREFRONT_URL`, `API_URL` |  |  |  |  |  |  |  | ✓ |
+| `GRAFANA_*` (optional) | | | | | | | | |
+
+`GRAFANA_*` is read only by `observability/tools/make_dashboards.py` (import-ready dashboards with your
+values, `observability/grafana/README.md`).
 
 ¹ `shoplite/db/apply_schema.py` and `seed.py`, `tools/check_local.py` (these three only ever read the
 root `.env`), and the login scripts you run with sqlcmd (pass the same value as in this file).

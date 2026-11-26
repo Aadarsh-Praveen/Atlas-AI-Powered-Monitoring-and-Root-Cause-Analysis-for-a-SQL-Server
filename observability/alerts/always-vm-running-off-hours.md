@@ -9,8 +9,9 @@
 | Condition | Table rows, greater than 0 |
 
 **Meaning:** the VM is running when it should be deallocated: weeknights after 23:45 UTC, before 13:00,
-or at the weekend. Usually a failed `vm-schedule.yml` deallocation, a manual start left on, or the 04:00
-safety-net shutdown failing too. It costs money every hour.
+or at the weekend. Usually a failed deallocate (the Logic App `logic-shoplite-vm-deallocate`), a start
+at the wrong time (a manual `force_start` left on, or, as on 2026-11-23, a GitHub run arriving hours
+late), or the 04:00 safety-net shutdown failing too. It costs money every hour.
 
 ```kusto
 // Business hours: Monday-Friday 13:00-23:00 UTC, plus 45 minutes' grace for the 23:00 deallocation
@@ -31,5 +32,7 @@ would hide.
 **Expected now and then:** if you start the VM yourself for maintenance outside business hours, this
 fires. It's the reminder to deallocate when you're done.
 
-**First checks:** GitHub Actions → VM schedule (did the 23:00 run fail?); deallocate: `vm-schedule.yml`
-by hand, or `az vm deallocate -g rg-shoplite-prod -n prod-sql-01`.
+**First checks:** `logic-shoplite-vm-deallocate` → **Overview** → Trigger history and Runs history (did
+23:00 fire? did the HTTP action fail?); GitHub Actions → VM schedule (a forced or late start?).
+Deallocate: `vm-schedule.yml` by hand (deallocate always works), or
+`az vm deallocate -g rg-shoplite-prod -n prod-sql-01`.

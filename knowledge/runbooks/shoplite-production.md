@@ -87,16 +87,27 @@ The VM keeps **business hours** (Phase 3), all times UTC, Monday to Friday:
 
 | UTC | Boston, summer / winter | What | By |
 |---|---|---|---|
-| 13:00 | 9 AM / 8 AM | **Start** | `.github/workflows/vm-schedule.yml` (OIDC, managed identity) |
-| 23:00 | 7 PM / 6 PM | **Deallocate** | `vm-schedule.yml` |
-| 04:00 (daily) | 12 AM / 11 PM | **Safety-net shutdown** if the 23:00 run failed | Azure auto-shutdown `shutdown-computevm-prod-sql-01` (production's value; the Bicep default is 01:00) |
+| 13:00 | 9 AM / 8 AM | **Start** | Azure Logic App `logic-shoplite-vm-start` (its own managed identity). _Temporarily also GitHub `vm-schedule.yml` until the Logic Apps are verified; Logic Apps in charge since: (fill in the date)_ |
+| 23:00 | 7 PM / 6 PM | **Deallocate** | Azure Logic App `logic-shoplite-vm-deallocate` (temporarily also `vm-schedule.yml`) |
+| 04:00 (daily) | 12 AM / 11 PM | **Safety-net shutdown** if the 23:00 deallocate failed | Azure auto-shutdown `shutdown-computevm-prod-sql-01` (production's value; the Bicep default is 01:00) |
+
+**Why Azure and not GitHub:** on Monday 2026-11-23 GitHub's scheduler ran `vm-schedule`'s 13:00 start
+at 00:30 UTC the next day (the VM ran all night until the 04:00 safety net) and never ran the 23:00
+deallocate. Setup, testing, run history, cost: `infra/vm-schedule-logic-apps.md`.
+
+**Did today's start or stop happen?** Each Logic App → **Overview** → **Trigger history** (fired at
+13:00 / 23:00?) and **Runs history** (select the run → the HTTP action's output: status code, error).
+A failed start shows up as the API-health and heartbeat alerts; a failed deallocate as the
+severity-1 `always-vm-running-off-hours` alert.
 
 Inside these hours SQL Agent runs the database jobs (backups, the ETL, maintenance; Phase 4) and
 GitHub runs the traffic and the restock. The full timetable of both, in UTC and Boston time, is
 `server/jobs/schedule.md`. Anything scheduled while the VM is off never runs.
 
 Weekends it stays off. To start or stop it outside these hours, run `vm-schedule.yml` by hand
-(Actions → VM schedule → Run workflow), or from the Mac:
+(Actions → VM schedule → Run workflow). Its **time guard** only starts the VM on weekdays 12:30–21:00
+UTC; for maintenance outside that window tick **`force_start`** (the run summary warns you, and the
+off-hours alert will fire until you deallocate). Deallocate by hand always works. Or from the Mac:
 
 ```bash
 az vm start      -g rg-shoplite-prod -n prod-sql-01      # start (about 2-3 minutes until the site answers)
@@ -408,12 +419,20 @@ the VM. Details: `.github/workflows/README.md`.
 ### Pausing traffic (the kill switch)
 
 Set the repository variable **`TRAFFIC_ENABLED`** to `false` (Settings → Secrets and variables →
-Actions → Variables). Shoppers, load, and restock then show as **skipped**. The VM schedule keeps
-running; disable `vm-schedule.yml` too if the VM should stay off. **Pause traffic before
+Actions → Variables). Shoppers, load, and restock then show as **skipped**. The VM's hours keep
+running; if the VM should stay off, **disable the Logic App `logic-shoplite-vm-start`** (and, while it
+still has a schedule, the `vm-schedule` workflow). Expect the alert `traffic-shoppers-missing` while
+traffic is paused in business hours. **Pause traffic before
 maintenance, deployments, and incident experiments**, and set it back to `true` afterwards.
 
 Every traffic workflow also checks `/health` first and skips (green run, "skipped" in the summary)
 when the VM is off or the API is unhealthy.
+
+**GitHub's scheduler can be hours late or skip runs** (2026-11-23: one shoppers run and one load run
+all day, no restock). Traffic stays on GitHub schedules anyway: a gap costs synthetic traffic, nothing
+else. It's noticed the same day by the alert **`traffic-shoppers-missing`** (no `playwright/` requests
+for 2 hours in business hours; section 20). Check **Actions** for runs that should have started, and
+GitHub's status page.
 
 ### Reading a run
 
@@ -841,7 +860,8 @@ Rules are stateful: one email when a problem starts, one ("Resolved") when it en
 | `api-latency` | 2 | API p95 over 1.5 s (15 min) | p95 by endpoint; slow dependencies (SQL? another service?); then SQL Server: plans, waits, blocking |
 | `api-health` | 2 | `/health` fails from 3 of 5 outside locations | `/health` yourself (section 5): 503 SQL, 502 API, timeout VM or Caddy |
 | `monitoring-collector-heartbeat` | 2 | No collector heartbeat for 5 minutes: the other SQL alerts are blind | `shoplite-collector` service and its log (section 21); the agent's `Heartbeat` (is the VM up?) |
-| `always-vm-running-off-hours` | **1** | The VM runs outside business hours (costs money) | Did vm-schedule's 23:00 run fail? Deallocate (section 4) |
+| `always-vm-running-off-hours` | **1** | The VM runs outside business hours (costs money) | `logic-shoplite-vm-deallocate` → Runs history: did 23:00 fire, did it fail? A forced or late start? Deallocate (section 4) |
+| `traffic-shoppers-missing` | 3 | No Playwright shopper requests for 2 hours in business hours | `TRAFFIC_ENABLED`? Actions → Shoppers: runs missing (GitHub's scheduler) or skipped (API unhealthy)? (section 12) |
 | `always-daily-cap` | **1** | Log Analytics hit its daily cap: every other alert is blind | The Usage query (section 19): which table grew, and why |
 
 **Testing the chain end to end:** `observability/test-alert.md` (stop the collector for 10 minutes in

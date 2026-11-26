@@ -1,11 +1,23 @@
-# .github/workflows/vm-schedule.yml: start prod-sql-01 at the start of ShopLite's
-# business hours and deallocate it at the end, so it isn't billing overnight.
+# .github/workflows/vm-schedule.yml: start or deallocate prod-sql-01.
+#
+# Business hours are moving to Azure Logic Apps (infra/vm-schedule-logic-apps.md),
+# because GitHub's scheduler can run hours late or not at all: on Monday
+# 2026-11-23 the 13:00 start arrived at 00:30 UTC the next day and started the
+# VM at night, and the 23:00 deallocate never came. TEMPORARY: the schedule
+# below stays until the Logic Apps are verified; then only manual runs remain.
 #
 # Schedule (cron is always UTC; Boston shifts by an hour with daylight saving):
 #   start       13:00 UTC Mon-Fri = 9 AM Boston in summer (EDT), 8 AM in winter (EST)
 #   deallocate  23:00 UTC Mon-Fri = 7 PM Boston in summer,        6 PM in winter
-# The VM's own auto-shutdown (04:00 UTC) stays as a safety net if the 23:00
-# run is late or fails. Weekends: the VM stays off.
+# The VM's own auto-shutdown (04:00 UTC) stays as a safety net. Weekends: off.
+#
+# Time guard (first step), so a late run can't do the wrong thing:
+#   start       only Mon-Fri 12:30-21:00 UTC, scheduled or manual. Outside it
+#               the run skips, says why in the summary, and stays green.
+#               Manual runs can override it: force_start (maintenance).
+#   deallocate  manual: always. Scheduled: only OUTSIDE business hours (not
+#               Mon-Fri 12:30-22:30 UTC): a scheduled deallocate that arrives
+#               then is yesterday's, hours late, and would stop the VM mid-day.
 #
 # Sign-in: OpenID Connect (OIDC). GitHub gives this run a short-lived token,
 # and Azure trusts it because a user-assigned managed identity has a federated
@@ -28,6 +40,10 @@ on:
         type: choice
         options: [start, deallocate]
         default: start
+      force_start:
+        description: "Start even outside weekdays 12:30-21:00 UTC (maintenance). Deallocate it yourself afterwards."
+        type: boolean
+        default: false
 
 permissions:
   id-token: write               # request the OIDC token for Azure sign-in
@@ -46,20 +62,57 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Decide start or deallocate
+      - name: Decide what to do (time guard)
         id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_ACTION: ${{ inputs.action }}
+          FORCE_START: ${{ inputs.force_start }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            action="${{ inputs.action }}"
-          elif [ "${{ github.event.schedule }}" = "0 13 * * 1-5" ]; then
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            action="$INPUT_ACTION"
+          elif [ "$SCHEDULE" = "0 13 * * 1-5" ]; then
             action=start
           else
             action=deallocate
           fi
+
+          # Now, in UTC: weekday 1-7 (Mon=1) and HHMM as a number (e.g. 1230).
+          day=$(date -u +%u); hhmm=$((10#$(date -u +%H%M))); now=$(date -u '+%A %H:%M UTC')
+          weekday=false; [ "$day" -le 5 ] && weekday=true
+
+          run=true; reason=""
+          if [ "$action" = "start" ]; then
+            if [ "$weekday" = true ] && [ "$hhmm" -ge 1230 ] && [ "$hhmm" -lt 2100 ]; then
+              reason="inside the start window"
+            elif [ "$EVENT" = "workflow_dispatch" ] && [ "$FORCE_START" = "true" ]; then
+              reason="FORCED outside the start window (force_start): deallocate it when you're done"
+            else
+              run=false
+              reason="$now is outside the start window (weekdays 12:30-21:00 UTC)"
+              [ "$EVENT" = "schedule" ] && reason="$reason: a late scheduled run (GitHub's scheduler)"
+              [ "$EVENT" = "workflow_dispatch" ] && reason="$reason. To start anyway, run again with force_start"
+            fi
+          elif [ "$EVENT" = "schedule" ] && [ "$weekday" = true ] && [ "$hhmm" -ge 1230 ] && [ "$hhmm" -lt 2230 ]; then
+            run=false
+            reason="$now is inside business hours: this scheduled deallocate is yesterday's, arriving late (GitHub's scheduler)"
+          else
+            reason="deallocate is allowed now"
+          fi
+
           echo "action=$action" >> "$GITHUB_OUTPUT"
-          echo "Action: $action"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Action: $action ($EVENT, $now). Run: $run. $reason"
+          if [ "$run" = false ]; then
+            echo "### prod-sql-01: $action **skipped**" >> "$GITHUB_STEP_SUMMARY"
+            echo "$reason. Nothing was changed." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$FORCE_START" = "true" ] && [ "$action" = "start" ]; then
+            echo "⚠️ $reason." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Sign in to Azure (OIDC, no stored password)
+        if: steps.decide.outputs.run == 'true'
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -68,15 +121,16 @@ jobs:
 
       - name: Start the VM
         id: start
-        if: steps.decide.outputs.action == 'start'
+        if: steps.decide.outputs.run == 'true' && steps.decide.outputs.action == 'start'
         run: az vm start --resource-group "$RESOURCE_GROUP" --name "$VM_NAME"
 
       - name: Deallocate the VM (stops compute billing)
-        if: steps.decide.outputs.action == 'deallocate'
+        if: steps.decide.outputs.run == 'true' && steps.decide.outputs.action == 'deallocate'
         run: az vm deallocate --resource-group "$RESOURCE_GROUP" --name "$VM_NAME"
 
+      # After a skip there's no Azure sign-in, so nothing to report.
       - name: Report the power state
-        if: always()
+        if: ${{ !cancelled() && steps.decide.outputs.run == 'true' }}
         run: |
           state=$(az vm get-instance-view --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" \
             --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus" -o tsv || echo unknown)

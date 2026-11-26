@@ -13,7 +13,7 @@ because GitHub would show a `.github/README.md` on the repo's front page instead
 
 | Workflow | What it does | Obeys the kill switch |
 |---|---|---|
-| `vm-schedule.yml` | Starts `prod-sql-01` in the morning, deallocates it in the evening (OIDC sign-in to Azure, no stored secret) | **No**: the VM keeps its hours while traffic is paused |
+| `vm-schedule.yml` | Starts or deallocates `prod-sql-01` (OIDC sign-in to Azure, no stored secret), with a **time guard** (below). Business hours are moving to Azure Logic Apps (`infra/vm-schedule-logic-apps.md`); **temporarily** it still runs on its 13:00/23:00 schedule until those are verified, then it's manual only | **No**: the VM keeps its hours while traffic is paused |
 | `shoppers.yml` | Playwright shoppers against the storefront (`shoplite/traffic/shoppers/`) | Yes |
 | `load.yml` | Locust background load on the API, following the daily curve (`shoplite/traffic/load/`) | Yes |
 | `restock.yml` | Nightly "receive a shipment": tops up low stock through `POST /api/admin/restock` | Yes |
@@ -27,19 +27,35 @@ winter (EST), so every local time below moves an hour twice a year.
 | When (UTC, Mon–Fri) | Boston, summer (EDT) | Boston, winter (EST) | What |
 |---|---|---|---|
 | 12:00 (**every day**) | 8:00 AM | 7:00 AM | `vendor-day`: the vendor's daily changes (weekends included: the vendor keeps working while ShopLite's VM is off) |
-| 13:00 | 9:00 AM | 8:00 AM | `vm-schedule`: **start** the VM |
+| 13:00 | 9:00 AM | 8:00 AM | **Start** the VM: Logic App `logic-shoplite-vm-start` (temporarily also `vm-schedule`) |
 | :10, :30, :50 from 13:10 to 22:50 | 9:10 AM–6:50 PM | 8:10 AM–5:50 PM | `shoppers`: 2 shoppers for 5 minutes |
 | :35 from 13:35 to 22:35 | 9:35 AM–6:35 PM | 8:35 AM–5:35 PM | `load`: a 10-minute Locust session |
 | Fridays 16:00 and 17:00 | 12:00 and 1:00 PM | 11:00 AM and 12:00 PM | `load`: the session that lands at 12:00 Boston hits the **flash sale** (12:00–12:20) |
 | 22:30 | 6:30 PM | 5:30 PM | `restock`: receive a shipment (Phase 4 moved it from 22:45, so it lands before SQL Server's 22:45 and final 22:50 log backups even when GitHub starts it late) |
-| 23:00 | 7:00 PM | 6:00 PM | `vm-schedule`: **deallocate** the VM |
-| 04:00 (every day) | 12:00 AM | 11:00 PM | Not a workflow: the VM's own Azure auto-shutdown, a safety net if the 23:00 run fails |
+| 23:00 | 7:00 PM | 6:00 PM | **Deallocate** the VM: Logic App `logic-shoplite-vm-deallocate` (temporarily also `vm-schedule`) |
+| 04:00 (every day) | 12:00 AM | 11:00 PM | Not a workflow: the VM's own Azure auto-shutdown, a safety net if the 23:00 deallocate fails |
 
 Weekends: the VM stays off and no traffic runs; only `vendor-day` runs.
 
-**GitHub's scheduled runs can start several minutes late**, and occasionally a run is skipped when
-GitHub is busy. That's fine for synthetic traffic. Every traffic workflow checks the API's `/health`
-first, so a run that starts before the VM is up (or after it's stopped) just skips.
+**GitHub's scheduled runs can start late, or not at all.** Usually it's minutes. On **Monday
+2026-11-23** it was hours: `vm-schedule`'s 13:00 start arrived at 00:30 UTC on Tuesday (and started the
+VM at night), the 23:00 deallocate never ran, there was one shoppers run and one load run all day, and
+restock didn't run (the 04:00 auto-shutdown stopped the VM). GitHub's community forum had many reports
+like it that month: it's GitHub's scheduler, not our cron lines. Hence:
+- the VM's hours move to Azure Logic Apps, whose schedule doesn't depend on GitHub;
+- `vm-schedule`'s **time guard** makes a late run harmless (below);
+- traffic stays on GitHub schedules for now: every traffic workflow checks the API's `/health` first,
+  so a run that starts while the VM is off just skips. A day with too little traffic is caught by the
+  alert `traffic-shoppers-missing` (`observability/alerts/`).
+
+### `vm-schedule`'s time guard
+
+| Action | Allowed |
+|---|---|
+| **start** (scheduled or manual) | Mon–Fri **12:30–21:00 UTC** only. Otherwise the run skips, says why in its summary, and stays **green** |
+| start with **`force_start`** (manual only) | Any time: for maintenance. The summary warns you; deallocate it yourself afterwards (the 04:00 safety net otherwise), and expect the off-hours alert |
+| **deallocate**, manual | Always |
+| **deallocate**, scheduled | Only **outside** Mon–Fri 12:30–22:30 UTC. One arriving inside is yesterday's, hours late, and would stop the VM mid-day: skipped |
 
 ## The kill switch: `TRAFFIC_ENABLED`
 
@@ -49,7 +65,9 @@ A repository **variable** (Settings → Secrets and variables → Actions → **
 - anything else (`false`, or not set): those three show as **skipped** on every run. Use this during
   maintenance, deployments, and incident experiments.
 
-It doesn't affect `vm-schedule.yml`. To keep the VM off as well, disable that workflow (below).
+It doesn't affect the VM's hours. To keep the VM off as well, **disable the Logic App
+`logic-shoplite-vm-start`** (`infra/vm-schedule-logic-apps.md`; and, while it still has a schedule,
+the `vm-schedule` workflow).
 
 ## The vendor's switch: `VENDOR_ACTIVITY_ENABLED`
 
@@ -93,7 +111,7 @@ inputs → **Run workflow**.
 
 | Workflow | Inputs |
 |---|---|
-| `vm-schedule` | `action`: `start` or `deallocate` |
+| `vm-schedule` | `action`: `start` or `deallocate`; `force_start` (start outside weekdays 12:30–21:00 UTC, for maintenance) |
 | `shoppers` | `duration` (seconds, default 300), `concurrency` (default 2) |
 | `load` | `duration` (seconds, default 300), `peak_users` (default 5) |
 | `restock` | `target_quantity` (default 100), `max_products` (default 500) |
@@ -107,7 +125,8 @@ Manual runs still respect the kill switch and the health check (except `vm-sched
 Open a run from the Actions tab:
 - **Summary** (the run's front page): `shoppers` shows outcome and persona tables plus the API status
   codes; `load` shows the session's settings and Locust's exit code; `vendor-day` shows the changes per kind; `restock` shows products restocked
-  and units added; `vm-schedule` shows the VM's power state and how long the API took to answer.
+  and units added; `vm-schedule` shows the VM's power state and how long the API took to answer, or
+  **skipped** with the reason (the time guard).
 - **Artifacts** (bottom of the summary): `shoppers-failure-<id>` (screenshots and traces of broken
   pages, **only when a page broke**, kept 5 days) and `locust-report-<id>` (the HTML report, kept 7
   days). View shopper traces at https://trace.playwright.dev (see `shoplite/traffic/shoppers/README.md`).
@@ -119,8 +138,8 @@ Open a run from the Actions tab:
 
 **GitHub disables scheduled workflows in a public repository when the repository has had no activity
 for 60 days** (no commits, roughly). It emails a warning beforehand. Manual runs still work, but
-nothing runs on its schedule (no VM start or stop, no traffic, no restock) until you switch them back
-on.
+nothing runs on its schedule (no traffic, no restock; and while `vm-schedule` still has a schedule,
+no GitHub VM start or stop) until you switch them back on. The Logic Apps aren't affected.
 
 To re-enable them: **Actions** tab → select the workflow on the left → the banner says it was
 disabled → **Enable workflow**. Do it for each of `vm-schedule`, `shoppers`, `load`, `restock`, and
