@@ -37,6 +37,7 @@ down. Azure Monitor sends the emails; Atlas will explain alerts (Phase 7), never
 | [api-latency](api-latency.md) | `shoplite-api-latency` | `AppRequests` | 15 min | 2 | suppressed |
 | [api-health-availability](api-health-availability.md) | `shoplite-api-health` | ping test (free) | 5 min | 2 | suppressed |
 | [monitoring-collector-heartbeat](monitoring-collector-heartbeat.md) | `shoplite-monitoring-collector-heartbeat` | `CollectorHeartbeat_CL` | 5 min | 2 | suppressed |
+| [traffic-shoppers-missing](traffic-shoppers-missing.md) | `shoplite-traffic-shoppers-missing` | `AppRequests` (`playwright/`) | 1 h | 3 | suppressed (and only fires 15:00–23:00 UTC on weekdays) |
 | [always-vm-running-off-hours](always-vm-running-off-hours.md) | `shoplite-always-vm-running-off-hours` | `Heartbeat` (agent) | 15 min | **1** | **always sent** |
 | [always-daily-cap](always-daily-cap.md) | `shoplite-always-daily-cap` | `_LogOperation` | 15 min | **1** | **always sent** |
 
@@ -94,10 +95,10 @@ where minutes matter run every 5 minutes; everything else every 15 minutes or sl
 |---|---|---|
 | Log search, every 5 min | 2: **blocking** (shoppers are stuck right now), **collector heartbeat** (every other alert is blind without it) | about $3.00 |
 | Log search, every 15 min | 13: deadlocks, job failed, log full, API errors, API latency, log backup age, restore failed, ETL, vendor, refresh, data disk, VM off-hours, daily cap | about $6.50 |
-| Log search, every 1 h | 2: full backup missing, restore missed | at most about $1.00 (no more than the 15-minute price) |
+| Log search, every 1 h | 3: full backup missing, restore missed, shoppers missing (added 2026-11-25) | at most about $1.50 (no more than the 15-minute price) |
 | Metric | 2: CPU credits; the availability test's alert | within the free monthly time series |
 | Availability test | 1 classic URL ping test | free |
-| **Total** | | **about $10 a month** |
+| **Total** | | **about $10.50 a month** |
 
 What the 15-minute rules give up: a deadlock burst, a failed job, a filling log, or an API error or
 latency spike is reported up to about 15 minutes later than at 5 minutes. The CPU-credits alert stays

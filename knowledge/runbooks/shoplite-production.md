@@ -819,7 +819,7 @@ are `ShopLite-Collector`; the API's are `ShopLite-API/<version>`; the ETL's `Sho
 | Item | Expected | Real |
 |---|---|---|
 | Log Analytics ingestion | about 0.5 GB a month (5 GB free); daily cap 0.5 GB/day as a runaway guard | _(fill in from the Usage query)_ |
-| Alert rules | about $10 a month (2 rules at 5 minutes, 13 at 15, 2 hourly; metric rules and the ping test free) | _(fill in)_ |
+| Alert rules | about $10.50 a month (2 rules at 5 minutes, 13 at 15, 3 hourly; metric rules and the ping test free) | _(fill in)_ |
 | ADX, Grafana Cloud | free tiers | |
 
 ```kusto
